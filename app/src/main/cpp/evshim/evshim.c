@@ -77,9 +77,10 @@ static void build_gamepad_dir(char *out, size_t size)
 {
     const char *base = getenv("EVSHIM_BASE_PATH");
 
-    // fallback
+    // Last-resort fallback. The Android launcher normally supplies
+    // EVSHIM_BASE_PATH so this stays package-independent.
     if (!base || !*base) {
-        base = "/data/data/app.gamenative/files";
+        base = "/tmp";
     }
 
     snprintf(out, size, "%s/gamepad_shm", base);

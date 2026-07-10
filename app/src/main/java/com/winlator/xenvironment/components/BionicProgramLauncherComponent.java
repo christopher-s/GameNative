@@ -187,20 +187,15 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
     private int execGuestProgram() {
 
         final int MAX_PLAYERS = 1; // old static method
+        Context context = environment.getContext();
+        ImageFs imageFs = ImageFs.find(context);
+        File rootDir = imageFs.getRootDir();
 
         // Get the number of enabled players directly from ControllerManager.
         final int enabledPlayerCount = MAX_PLAYERS;
         for (int i = 0; i < enabledPlayerCount; i++) {
-            String memPath;
-            if (i == 0) {
-                // Player 1 uses the original, non-numbered path that is known to work.
-                memPath = "/data/data/app.gamenative/files/imagefs/tmp/gamepad.mem";
-            } else {
-                // Players 2, 3, 4 use a 1-based index.
-                memPath = "/data/data/app.gamenative/files/imagefs/tmp/gamepad" + i + ".mem";
-            }
-
-            File memFile = new File(memPath);
+            String fileName = i == 0 ? "gamepad.mem" : "gamepad" + i + ".mem";
+            File memFile = new File(new File(rootDir, "tmp"), fileName);
             memFile.getParentFile().mkdirs();
             try (RandomAccessFile raf = new RandomAccessFile(memFile, "rw")) {
                 raf.setLength(64);
@@ -208,10 +203,6 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
                 Log.e("EVSHIM_HOST", "Failed to create mem file for player index "+i, e);
             }
         }
-        Context context = environment.getContext();
-        ImageFs imageFs = ImageFs.find(context);
-        File rootDir = imageFs.getRootDir();
-
         PrefManager.init(context);
         boolean enableBox86_64Logs = PrefManager.getBoolean("enable_box86_64_logs", true);
         boolean shareAndroidClipboard = PrefManager.getBoolean("share_android_clipboard", false);
@@ -311,6 +302,7 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
 
         envVars.put("LD_PRELOAD", ld_preload);
         envVars.put("EVSHIM_WINE", 1);
+        envVars.put("EVSHIM_BASE_PATH", context.getFilesDir().getAbsolutePath());
         envVars.put("EVSHIM_SHM_NAME", "controller-shm0");
 
         // Check for specific shared memory libraries
@@ -568,7 +560,7 @@ public class BionicProgramLauncherComponent extends GuestProgramLauncherComponen
         // resolves <HOME>/Steam/config/config.vdf etc. relative to it.
         String nativeHome = imageFs.wineprefix + "/drive_c/Program Files (x86)";
         // The Android-Steam build of libsteamclient.so ships inside our imagefs
-        // (e.g. /data/data/app.gamenative/files/imagefs/usr/lib/libsteamclient.so).
+        // (for example, <app files>/imagefs/usr/lib/libsteamclient.so).
         String libPath = new File(imageFs.getLibDir(), "libsteamclient.so").getAbsolutePath();
 
         File libFile = new File(libPath);

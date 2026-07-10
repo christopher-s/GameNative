@@ -47,15 +47,7 @@ public class Container {
     public static final String DEFAULT_GRAPHICSDRIVERCONFIG = "vulkanVersion=1.3" + ",version=" + DefaultVersion.WRAPPER + ",blacklistedExtensions=" + ",maxDeviceMemory=0" + ",presentMode=mailbox" + ",syncFrame=0" + ",disablePresentWait=0" + ",resourceType=auto" + ",bcnEmulation=auto" + ",bcnEmulationType=compute" + ",bcnEmulationCache=0" + ",gpuName=Device";
     public static final String DEFAULT_WINCOMPONENTS = "direct3d=1,directsound=1,directinput8=0,directinput=0,directmusic=0,directshow=0,directplay=0,vcrun2010=1,wmdecoder=1,opengl=0";
     public static final String FALLBACK_WINCOMPONENTS = "direct3d=1,directsound=1,directinput8=0,directinput=0,directmusic=1,directshow=1,directplay=1,vcrun2010=1,wmdecoder=1,opengl=0";
-    public static final String[] MEDIACONV_ENV_VARS = {
-            "MEDIACONV_AUDIO_DUMP_FILE=/data/data/app.gamenative/files/imagefs/home/xuser/audio.dmp",
-            "MEDIACONV_VIDEO_DUMP_FILE=/data/data/app.gamenative/files/imagefs/home/xuser/video.dmp",
-            "MEDIACONV_VIDEO_TRANSCODED_FILE=/data/data/app.gamenative/files/imagefs/home/xuser/transcoded.mkv",
-            "MEDIACONV_AUDIO_TRANSCODED_FILE=/data/data/app.gamenative/files/imagefs/home/xuser/transcoded.wav",
-            "MEDIACONV_BLANK_AUDIO_FILE=/data/data/app.gamenative/files/imagefs/home/xuser/blank.wav",
-            "MEDIACONV_BLANK_VIDEO_FILE=/data/data/app.gamenative/files/imagefs/home/xuser/blank.mkv",
-    };
-    public static final String DEFAULT_DRIVES = "D:"+Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)+"E:/data/data/app.gamenative/storage";
+    public static final String DEFAULT_DRIVES = "D:"+Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
     public static final String DEFAULT_VARIANT = DefaultVersion.VARIANT;
     public static final String DEFAULT_WINE_VERSION = DefaultVersion.WINE_VERSION;
     public static final byte STARTUP_SELECTION_NORMAL = 0;
@@ -73,6 +65,17 @@ public class Container {
     public static final String GLIBC = "glibc";
     public static final String BIONIC = "bionic";
     public static final byte MAX_DRIVE_LETTERS = 8;
+
+    public static String[] getMediaConvEnvVars(String imageFsHomePath) {
+        return new String[] {
+                "MEDIACONV_AUDIO_DUMP_FILE=" + new File(imageFsHomePath, "audio.dmp").getAbsolutePath(),
+                "MEDIACONV_VIDEO_DUMP_FILE=" + new File(imageFsHomePath, "video.dmp").getAbsolutePath(),
+                "MEDIACONV_VIDEO_TRANSCODED_FILE=" + new File(imageFsHomePath, "transcoded.mkv").getAbsolutePath(),
+                "MEDIACONV_AUDIO_TRANSCODED_FILE=" + new File(imageFsHomePath, "transcoded.wav").getAbsolutePath(),
+                "MEDIACONV_BLANK_AUDIO_FILE=" + new File(imageFsHomePath, "blank.wav").getAbsolutePath(),
+                "MEDIACONV_BLANK_VIDEO_FILE=" + new File(imageFsHomePath, "blank.mkv").getAbsolutePath(),
+        };
+    }
     public final String id;
     private String name;
     private String screenSize = DEFAULT_SCREEN_SIZE;
@@ -650,6 +653,26 @@ public class Container {
         }
         return drive;
     }
+
+    public static String setDrivePath(String drives, char driveLetter, String path) {
+        StringBuilder updated = new StringBuilder();
+        boolean replaced = false;
+        for (String[] drive : drivesIterator(drives)) {
+            char currentLetter = drive[0].charAt(0);
+            updated.append(currentLetter).append(':');
+            if (Character.toUpperCase(currentLetter) == Character.toUpperCase(driveLetter)) {
+                updated.append(path);
+                replaced = true;
+            } else {
+                updated.append(drive[1]);
+            }
+        }
+        if (!replaced) {
+            updated.append(Character.toUpperCase(driveLetter)).append(':').append(path);
+        }
+        return updated.toString();
+    }
+
     public static Iterable<String[]> drivesIterator(final String drives) {
         final int[] index = {drives.indexOf(":")};
         final String[] item = new String[2];
