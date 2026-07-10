@@ -53,6 +53,7 @@ import app.gamenative.events.SteamEvent
 import app.gamenative.utils.CaseInsensitiveFileSystem
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
+import app.gamenative.utils.GameStoragePaths
 import app.gamenative.utils.LicenseSerializer
 import app.gamenative.utils.MarkerUtils
 import app.gamenative.utils.Net
@@ -443,35 +444,23 @@ class SteamService : Service(), IChallengeUrlChanged {
         val internalAppInstallPath: String
             get() = Paths.get(DownloadService.baseDataDirPath, "Steam", "steamapps", "common").pathString
 
-        /**
-         * Root used when "use external storage" is enabled. On legacy this is whatever the
-         * user picked in settings (SD card / USB). On modern we force the primary external
-         * app-scoped dir (/storage/emulated/0/Android/data/<pkg>/files) so no permission
-         * is needed. Falls back to the configured path if for some reason the primary
-         * external app dir isn't available yet (e.g. before populateDownloadService runs).
-         */
         private val externalAppInstallRoot: String
-            get() = if (BuildConfig.MODERN_ANDROID && DownloadService.baseExternalAppDirPath.isNotBlank()) {
-                DownloadService.baseExternalAppDirPath + "/files"
-            } else {
-                PrefManager.externalStoragePath
-            }
+            get() = GameStoragePaths.selectedExternalRoot
 
         val externalAppInstallPath: String
-            get() = Paths.get(externalAppInstallRoot, "Steam", "steamapps", "common").pathString
+            get() = GameStoragePaths.steamInstallPath(externalAppInstallRoot)
 
         // all install paths: internal + configured external + all mounted volumes
         val allInstallPaths: List<String>
             get() {
                 val paths = mutableListOf(internalAppInstallPath)
-                // only include configured external path if it's a real absolute path
-                if (PrefManager.externalStoragePath.isNotBlank()) {
-                    paths += externalAppInstallPath
-                }
-                for (volPath in DownloadService.externalVolumePaths) {
-                    if (volPath.isNotBlank()) {
-                        paths += Paths.get(volPath, "Steam", "steamapps", "common").pathString
-                    }
+                val externalRoots = buildList {
+                    add(DownloadService.primaryExternalFilesPath)
+                    add(GameStoragePaths.selectedExternalRoot)
+                    addAll(DownloadService.externalVolumePaths)
+                }.filter { it.isNotBlank() }.distinct()
+                for (root in externalRoots) {
+                    paths += GameStoragePaths.steamInstallPath(root)
                 }
                 return paths.distinct()
             }
@@ -482,16 +471,11 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
         private val externalAppStagingPath: String
             get() {
-                return Paths.get(externalAppInstallRoot, "Steam", "steamapps", "staging").pathString
+                return GameStoragePaths.steamStagingPath(externalAppInstallRoot)
             }
 
-        // True when "use external storage" is on AND the resolved external root is usable.
-        // Modern flavor always has a usable primary-external app-scoped root, so this is
-        // effectively just useExternalStorage on modern.
         private val externalStorageReady: Boolean
-            get() = PrefManager.useExternalStorage && File(externalAppInstallRoot).let {
-                it.path.isNotBlank() && it.exists()
-            }
+            get() = GameStoragePaths.isExternalStorageReady
 
         val defaultStoragePath: String
             get() {
@@ -520,7 +504,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         val defaultAppStagingPath: String
             get() {
-                return if (PrefManager.useExternalStorage) {
+                return if (externalStorageReady) {
                     externalAppStagingPath
                 } else {
                     internalAppStagingPath

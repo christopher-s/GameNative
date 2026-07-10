@@ -515,7 +515,8 @@ fun SettingsGroupInterface(
         val ctx = LocalContext.current
         val sm = ctx.getSystemService(StorageManager::class.java)
 
-        // All writable non-primary volumes (SD / USB).
+        // All mounted app-scoped external directories. Primary phone storage is
+        // intentionally included so game payloads can be reached through ADB.
         // getExternalFilesDirs misses USB OTG on most devices, so StorageUtils also
         // enumerates StorageManager.storageVolumes and synthesizes the per-app files dir.
         // Runs off the composition thread because synthesizing the USB candidate
@@ -525,14 +526,21 @@ fun SettingsGroupInterface(
             value = withContext(Dispatchers.IO) {
                 StorageUtils.getAllExternalFilesDirs(ctx)
                     .filter { Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED }
-                    .filter { sm?.getStorageVolume(it)?.isPrimary != true }
+                    .distinctBy { it.absolutePath }
+                    .sortedByDescending { sm?.getStorageVolume(it)?.isPrimary == true }
             }
         }
 
         // Labels the user sees
-        val labels = remember(dirs) {
+        val phoneStorageLabel = stringResource(R.string.settings_interface_phone_storage)
+        val labels = remember(dirs, phoneStorageLabel, externalStorageFallbackLabel) {
             dirs.map { dir ->
-                sm?.getStorageVolume(dir)?.getDescription(ctx) ?: externalStorageFallbackLabel
+                val volume = sm?.getStorageVolume(dir)
+                if (volume?.isPrimary == true) {
+                    phoneStorageLabel
+                } else {
+                    volume?.getDescription(ctx) ?: externalStorageFallbackLabel
+                }
             }
         }
         var useExternalStorage by rememberSaveable { mutableStateOf(PrefManager.useExternalStorage) }
@@ -555,7 +563,7 @@ fun SettingsGroupInterface(
                 }
             },
         )
-        if (useExternalStorage) {
+        if (useExternalStorage && dirs.isNotEmpty()) {
             // Currently selected item
             var selectedIndex by rememberSaveable {
                 mutableStateOf(

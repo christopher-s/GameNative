@@ -2,7 +2,7 @@ package app.gamenative.service.amazon
 
 import android.content.Context
 import android.net.Uri
-import app.gamenative.PrefManager
+import app.gamenative.utils.GameStoragePaths
 import java.io.File
 import java.nio.file.Paths
 import timber.log.Timber
@@ -58,13 +58,13 @@ object AmazonConstants {
     }
 
     fun externalAmazonGamesPath(): String {
-        val path = Paths.get(PrefManager.externalStoragePath, "Amazon", "games").toString()
-        File(path).mkdirs()
+        val path = GameStoragePaths.amazonInstallPath(GameStoragePaths.selectedExternalRoot)
+        if (path.isNotBlank()) File(path).mkdirs()
         return path
     }
 
     fun defaultAmazonGamesPath(context: Context): String {
-        return if (PrefManager.useExternalStorage && File(PrefManager.externalStoragePath).exists()) {
+        return if (GameStoragePaths.isExternalStorageReady) {
             val path = externalAmazonGamesPath()
             Timber.i("Amazon using external storage: $path")
             path

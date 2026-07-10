@@ -997,6 +997,7 @@
     <string name="settings_interface_no_external_storage">No external storage detected</string>
     <string name="settings_interface_external_storage_subtitle">Save games to external storage</string>
     <string name="settings_interface_storage_volume_title">Storage volume</string>
+    <string name="settings_interface_phone_storage">Phone storage (ADB-accessible)</string>
     <string name="settings_interface_download_server_title">Steam Download Server</string>
     <string name="settings_interface_restart_required_title">Restart Required</string>
 
