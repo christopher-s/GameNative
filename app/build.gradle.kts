@@ -163,6 +163,8 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".mod"
+            versionNameSuffix = "-mod"
             isDebuggable = true
             isMinifyEnabled = false
             isShrinkResources = false

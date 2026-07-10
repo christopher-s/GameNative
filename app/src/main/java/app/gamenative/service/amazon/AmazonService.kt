@@ -67,8 +67,8 @@ class AmazonService : Service() {
     private val activeDownloadPaths = ConcurrentHashMap<String, String>()
 
     companion object {
-        private const val ACTION_SYNC_LIBRARY = "app.gamenative.AMAZON_SYNC_LIBRARY"
-        private const val ACTION_MANUAL_SYNC = "app.gamenative.AMAZON_MANUAL_SYNC"
+        private val ACTION_SYNC_LIBRARY = "${app.gamenative.BuildConfig.APPLICATION_ID}.AMAZON_SYNC_LIBRARY"
+        private val ACTION_MANUAL_SYNC = "${app.gamenative.BuildConfig.APPLICATION_ID}.AMAZON_MANUAL_SYNC"
         private const val SYNC_THROTTLE_MILLIS = 15 * 60 * 1000L // 15 minutes
         private var instance: AmazonService? = null
 
@@ -365,7 +365,7 @@ class AmazonService : Service() {
         private fun getPartialInstallPaths(context: Context): Set<String> {
             val roots = buildList {
                 add(AmazonConstants.internalAmazonGamesPath(context))
-                if (app.gamenative.PrefManager.externalStoragePath.isNotBlank()) {
+                if (app.gamenative.utils.GameStoragePaths.selectedExternalRoot.isNotBlank()) {
                     add(AmazonConstants.externalAmazonGamesPath())
                 }
             }.distinct()
