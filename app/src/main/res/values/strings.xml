@@ -998,6 +998,11 @@
     <string name="settings_interface_external_storage_subtitle">Save games to external storage</string>
     <string name="settings_interface_storage_volume_title">Storage volume</string>
     <string name="settings_interface_phone_storage">Phone storage (ADB-accessible)</string>
+    <string name="settings_interface_custom_storage_folder_label">Custom folder</string>
+    <string name="settings_interface_custom_storage_folder_title">Choose game storage folder</string>
+    <string name="settings_interface_custom_storage_folder_subtitle">Choose a folder on phone, SD, or USB storage</string>
+    <string name="settings_interface_custom_storage_folder_invalid">The selected folder is not readable and writable</string>
+    <string name="settings_interface_custom_storage_permission_denied">All files access is required for a custom game folder</string>
     <string name="settings_interface_download_server_title">Steam Download Server</string>
     <string name="settings_interface_restart_required_title">Restart Required</string>
 
