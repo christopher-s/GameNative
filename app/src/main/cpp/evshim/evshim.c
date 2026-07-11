@@ -73,14 +73,56 @@ static int vjoy_ids[MAX_GAMEPADS];
 static size_t g_shm_map_size = 0;
 static int g_is_wine = 0;
 
+static int is_valid_package_name(const char *name)
+{
+    if (!name || !*name) return 0;
+
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
+        if (!(('a' <= *p && *p <= 'z') ||
+              ('A' <= *p && *p <= 'Z') ||
+              ('0' <= *p && *p <= '9') ||
+              *p == '.' || *p == '_')) {
+            return 0;
+        }
+    }
+
+    return strchr(name, '.') != NULL;
+}
+
+static int derive_android_files_dir(char *out, size_t size)
+{
+    char process_name[256] = {0};
+    int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+
+    ssize_t length = read(fd, process_name, sizeof(process_name) - 1);
+    close(fd);
+    if (length <= 0) return -1;
+
+    process_name[length] = '\0';
+    char *suffix = strchr(process_name, ':');
+    if (suffix) *suffix = '\0';
+
+    if (!is_valid_package_name(process_name)) return -1;
+
+    int written = snprintf(out, size, "/data/user/0/%s/files", process_name);
+    return (written > 0 && (size_t)written < size) ? 0 : -1;
+}
+
 static void build_gamepad_dir(char *out, size_t size)
 {
     const char *base = getenv("EVSHIM_BASE_PATH");
+    char derived_base[PATH_MAX];
 
-    // Last-resort fallback. The Android launcher normally supplies
-    // EVSHIM_BASE_PATH so this stays package-independent.
+    // Wine receives EVSHIM_BASE_PATH explicitly. The Android Java process
+    // loads this library before that launch environment exists, so derive its
+    // package-private files directory from /proc/self/cmdline instead.
     if (!base || !*base) {
-        base = "/tmp";
+        if (derive_android_files_dir(derived_base, sizeof(derived_base)) == 0) {
+            base = derived_base;
+        } else {
+            base = "/tmp";
+        }
     }
 
     snprintf(out, size, "%s/gamepad_shm", base);
