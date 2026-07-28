@@ -159,6 +159,7 @@ fun SettingsGroupInterface(
 
     // Achievements
     var showAchievementNotifications by rememberSaveable { mutableStateOf(PrefManager.achievementShowNotification) }
+    var playAchievementSound by rememberSaveable { mutableStateOf(PrefManager.achievementPlaySound) }
 
     // Language selection dialog
     var openLanguageDialog by rememberSaveable { mutableStateOf(false) }
@@ -262,6 +263,15 @@ fun SettingsGroupInterface(
             onCheckedChange = {
                 showAchievementNotifications = it
                 PrefManager.achievementShowNotification = it
+            },
+        )
+        SettingsSwitch(
+            colors = settingsTileColorsAlt(),
+            title = { Text(text = stringResource(R.string.settings_achievement_play_sound)) },
+            state = playAchievementSound,
+            onCheckedChange = {
+                playAchievementSound = it
+                PrefManager.achievementPlaySound = it
             },
         )
         // Achievement notification position

@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color.TRANSPARENT
+import android.hardware.input.InputManager
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
@@ -35,11 +36,17 @@ import coil.request.CachePolicy
 import app.gamenative.BuildConfig
 import app.gamenative.PrefManager
 import app.gamenative.events.AndroidEvent
+import app.gamenative.mods.NexusDownloadLinkInbox
+import app.gamenative.mods.NexusIntegrationStatus
+import app.gamenative.mods.NexusPendingDownloadStore
+import app.gamenative.ui.screen.library.appscreen.BaseAppScreen
 import app.gamenative.service.SteamService
 import app.gamenative.service.gog.GOGService
 import app.gamenative.service.epic.EpicService
 import app.gamenative.ui.PluviaMain
 import app.gamenative.ui.enums.Orientation
+import app.gamenative.ui.util.LocalSnackbarHostController
+import app.gamenative.ui.util.SnackbarHostController
 import app.gamenative.utils.AnimatedPngDecoder
 import app.gamenative.data.GameSource
 import app.gamenative.utils.ContainerUtils
@@ -130,6 +137,21 @@ class MainActivity : ComponentActivity() {
         finishAndRemoveTask()
     }
 
+    private var controllerInputManager: InputManager? = null
+    private val controllerDeviceListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) {
+            ControllerManager.getInstance().onDeviceConnected(deviceId)
+        }
+
+        override fun onInputDeviceRemoved(deviceId: Int) {
+            ControllerManager.getInstance().onDeviceDisconnected(deviceId)
+        }
+
+        override fun onInputDeviceChanged(deviceId: Int) {
+            ControllerManager.getInstance().onDeviceConnected(deviceId)
+        }
+    }
+
     private var index = totalIndex++
 
     // Add a property to keep a reference to the orientation sensor listener
@@ -186,7 +208,9 @@ class MainActivity : ComponentActivity() {
         applyImmersiveMode()
 
         // Initialize the controller management system
-        ControllerManager.getInstance().init(getApplicationContext())
+        ControllerManager.getInstance().init(applicationContext)
+        controllerInputManager = getSystemService(Context.INPUT_SERVICE) as InputManager
+        controllerInputManager?.registerInputDeviceListener(controllerDeviceListener, null)
 
         ContainerUtils.setContainerDefaults(applicationContext)
 
@@ -253,7 +277,11 @@ class MainActivity : ComponentActivity() {
                     .also { appImageLoader = it }
             }
 
-            CompositionLocalProvider(LocalCoilImageLoader provides imageLoader) {
+            val snackbarController = remember { SnackbarHostController() }
+            CompositionLocalProvider(
+                LocalCoilImageLoader provides imageLoader,
+                LocalSnackbarHostController provides snackbarController,
+            ) {
                 PluviaMain()
             }
         }
@@ -268,6 +296,38 @@ class MainActivity : ComponentActivity() {
         // recents re-delivers the same intent with this flag — don't re-launch
         if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) {
             Timber.d("[IntentLaunch]: Ignoring intent re-delivered from recents")
+            return
+        }
+        if (intent.action == Intent.ACTION_VIEW && intent.data?.scheme.equals("nxm", ignoreCase = true)) {
+            // Do not retain a signed NXM grant as the Activity's launch intent. Android can
+            // otherwise replay it after a configuration change or process recreation.
+            setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
+            if (!NexusIntegrationStatus.ONLINE_ACCESS_AVAILABLE) {
+                Timber.i("[NexusDownload]: Ignoring NXM callback while online Nexus access is disabled")
+                SnackbarManager.show(getString(R.string.nexus_integration_temporarily_unavailable))
+                return
+            }
+            val restoredDownloads = NexusPendingDownloadStore.restore(this)
+            restoredDownloads.forEach { NexusDownloadLinkInbox.expect(it) }
+            val reference = intent.dataString?.let(NexusDownloadLinkInbox::submit)
+            if (reference != null) {
+                restoredDownloads.firstOrNull { pending ->
+                    pending.reference.gameDomain.equals(reference.gameDomain, ignoreCase = true) &&
+                        pending.reference.modId == reference.modId &&
+                        pending.file.fileId == reference.fileId
+                }?.let { pending -> BaseAppScreen.requestManageMods(pending.appId) }
+                NexusPendingDownloadStore.removeMatching(this, reference)
+                Timber.i(
+                    "[NexusDownload]: Received authorized NXM callback for %s/%d/%s",
+                    reference.gameDomain,
+                    reference.modId,
+                    reference.fileId,
+                )
+                SnackbarManager.show(getString(R.string.nexus_nxm_callback_received))
+            } else {
+                Timber.w("[NexusDownload]: Ignoring malformed or unsigned NXM callback")
+                SnackbarManager.show(getString(R.string.nexus_invalid_nxm_callback))
+            }
             return
         }
         Timber.d("[IntentLaunch]: handleLaunchIntent called with action=${intent.action}, isNewIntent=$isNewIntent")
@@ -318,6 +378,9 @@ class MainActivity : ComponentActivity() {
         }
 
         super.onDestroy()
+
+        controllerInputManager?.unregisterInputDeviceListener(controllerDeviceListener)
+        controllerInputManager = null
 
         PluviaApp.events.off<AndroidEvent.SetSystemUIVisibility, Unit>(onSetSystemUi)
         PluviaApp.events.off<AndroidEvent.StartOrientator, Unit>(onStartOrientator)

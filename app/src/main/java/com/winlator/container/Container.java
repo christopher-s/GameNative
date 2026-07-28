@@ -140,6 +140,8 @@ public class Container {
     private boolean shooterMode = true;
     // Serialised JSON gesture configuration (used when touchscreenMode is true)
     private String gestureConfig = "";
+    // Serialised JSON shooter mode configuration (used when shooterMode is true)
+    private String shooterConfig = "";
     // External display input handling
     private String externalDisplayMode = DEFAULT_EXTERNAL_DISPLAY_MODE;
     // Swap game/input between internal and external displays
@@ -749,6 +751,10 @@ public class Container {
             if (gestureConfig != null && !gestureConfig.isEmpty()) {
                 data.put("gestureConfig", gestureConfig);
             }
+            // Shooter mode configuration JSON
+            if (shooterConfig != null && !shooterConfig.isEmpty()) {
+                data.put("shooterConfig", shooterConfig);
+            }
             data.put("externalDisplayMode", externalDisplayMode);
             data.put("externalDisplaySwap", externalDisplaySwap);
             data.put("useDRI3", useDRI3);
@@ -957,6 +963,9 @@ public class Container {
                     break;
                 case "gestureConfig" :
                     setGestureConfig(data.optString(key, ""));
+                    break;
+                case "shooterConfig" :
+                    setShooterConfig(data.optString(key, ""));
                     break;
                 case "externalDisplayMode" :
                     setExternalDisplayMode(data.getString(key));
@@ -1197,6 +1206,15 @@ public class Container {
 
     public void setGestureConfig(String gestureConfig) {
         this.gestureConfig = gestureConfig != null ? gestureConfig : "";
+    }
+
+    // Shooter mode configuration JSON
+    public String getShooterConfig() {
+        return shooterConfig != null ? shooterConfig : "";
+    }
+
+    public void setShooterConfig(String shooterConfig) {
+        this.shooterConfig = shooterConfig != null ? shooterConfig : "";
     }
 
     // External display mode
