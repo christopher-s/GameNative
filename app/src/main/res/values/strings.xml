@@ -190,6 +190,9 @@
     <string name="container_config_custom_resolution_separator">x</string>
     <string name="container_config_custom_resolution_error_nonzero">Width and height must be greater than 0</string>
     <string name="container_config_custom_resolution_error_aspect">Width must be greater than height</string>
+    <string name="resolution_native">Native</string>
+    <string name="resolution_optimized">Optimized</string>
+    <string name="resolution_half">Half</string>
     <string name="storage_info">Storage Info</string>
     <string name="duplicate">Duplicate</string>
     <string name="reconfigure">Reconfigure</string>
@@ -2160,4 +2163,11 @@
     <string name="local_mod_copied_progress">Copied %1$s of %2$s</string>
     <string name="nexus_invalid_source_metadata">This managed mod has incomplete source information and cannot be retried.</string>
     <string name="nexus_archive_memory_error">Archive needs more memory than Android allows. Retry after updating GameNative or choose a smaller file.</string>
+    <string name="aspect_ratio_19_5_9">19.5:9</string>
+    <string name="aspect_ratio_21_5_9">21.5:9</string>
+    <string name="language_schinese">Simplified Chinese</string>
+    <string name="language_tchinese">Traditional Chinese</string>
+    <string name="language_koreana">Korean</string>
+    <string name="language_latam">Spanish (Latin America)</string>
+    <string name="language_brazilian">Portuguese (Brazil)</string>
 </resources>
