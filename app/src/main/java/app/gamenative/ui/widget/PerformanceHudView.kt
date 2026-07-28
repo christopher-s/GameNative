@@ -21,6 +21,7 @@ import android.os.SystemClock
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import app.gamenative.powercontrol.PowerManager
 import app.gamenative.ui.data.PerformanceHudConfig
 import app.gamenative.ui.data.PerformanceHudSize
 import app.gamenative.utils.DateTimeUtils.formatRuntimeHours
@@ -405,6 +406,11 @@ class PerformanceHudView(
         cpuMetric.compactGraph?.addSample(snapshot.cpuValue)
         gpuMetric.stackedGraph?.addSample(snapshot.gpuValue)
         gpuMetric.compactGraph?.addSample(snapshot.gpuValue)
+
+        // Update PowerManager with CPU/GPU usage for auto-tuning
+        PowerManager.currentFps = snapshot.fpsValue
+        PowerManager.currentCpuUsage = snapshot.cpuValue ?: 0f
+        PowerManager.currentGpuUsage = snapshot.gpuValue ?: 0f
     }
 
     private fun applySnapshotText(snapshot: HudSnapshot) {

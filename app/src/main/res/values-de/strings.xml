@@ -2096,4 +2096,32 @@
     <string name="local_mod_copied_progress">%1$s von %2$s kopiert</string>
     <string name="nexus_invalid_source_metadata">Diese verwaltete Mod enthält unvollständige Quellinformationen und kann nicht erneut versucht werden.</string>
     <string name="nexus_archive_memory_error">Das Archiv benötigt mehr Speicher, als Android zulässt. Versuche es nach einer Aktualisierung von GameNative erneut oder wähle eine kleinere Datei.</string>
+
+    <!-- Power Control -->
+    <string name="power_control">Leistungssteuerung</string>
+    <string name="power_control_info">Steuert CPU-Frequenzskalierung und Governor-Einstellungen. Erfordert den PServer-Dienst.</string>
+    <string name="power_control_driver">Treiber: %s</string>
+    <string name="power_control_profiles">Leistungsprofile</string>
+    <string name="power_control_governor">CPU-Governor</string>
+    <string name="power_control_current_frequencies">Aktuelle Frequenzen</string>
+    <string name="power_control_frequencies">Frequenzeinstellungen</string>
+    <string name="power_control_cpu_min_freq">Minimale CPU-Frequenz</string>
+    <string name="power_control_cpu_max_freq">Maximale CPU-Frequenz</string>
+    <string name="power_control_gpu_freq">GPU-Frequenz</string>
+    <string name="power_control_gpu_min_power">Minimale GPU-Leistung</string>
+    <string name="power_control_gpu_max_power">Maximale GPU-Leistung</string>
+    <string name="power_control_ram_min_power">Minimale RAM-Frequenz</string>
+    <string name="power_control_ram_max_power">Maximale RAM-Frequenz</string>
+    <string name="power_control_available_frequencies">Verfügbare Frequenzen</string>
+    <string name="power_control_auto_tuning">Automatische Anpassung</string>
+    <string name="power_control_auto_tuning_desc">Leistung automatisch basierend auf FPS anpassen</string>
+    <string name="power_control_tuning_strategy">Tuning-Strategie</string>
+    <string name="power_control_strategy_balanced">Ausgewogen</string>
+    <string name="power_control_strategy_balanced_desc">Alle Komponenten gleichmäßig anpassen für beste Gesamtleistung</string>
+    <string name="power_control_strategy_power_efficient">Energieeffizient</string>
+    <string name="power_control_strategy_power_efficient_desc">Nicht-Engpass-Komponenten reduzieren, um Energie zu sparen</string>
+    <string name="power_control_strategy_aggressive">Aggressiv</string>
+    <string name="power_control_strategy_aggressive_desc">Leistung bei erkannten Engpässen maximieren</string>
+    <string name="power_control_strategy_conservative">Konservativ</string>
+    <string name="power_control_strategy_conservative_desc">Schrittweise Anpassungen mit Fokus auf Stabilität</string>
 </resources>

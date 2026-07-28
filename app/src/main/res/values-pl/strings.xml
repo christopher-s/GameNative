@@ -2158,4 +2158,32 @@
     <string name="local_mod_copied_progress">Skopiowano %1$s z %2$s</string>
     <string name="nexus_invalid_source_metadata">Ten zarządzany mod ma niepełne informacje o źródle i nie można ponowić operacji.</string>
     <string name="nexus_archive_memory_error">Archiwum wymaga więcej pamięci, niż pozwala Android. Spróbuj ponownie po aktualizacji GameNative lub wybierz mniejszy plik.</string>
+
+    <!-- Power Control -->
+    <string name="power_control">Kontrola wydajności</string>
+    <string name="power_control_info">Kontroluje skalowanie częstotliwości procesora i ustawienia regulatora. Wymaga usługi PServer.</string>
+    <string name="power_control_driver">Sterownik: %s</string>
+    <string name="power_control_profiles">Profile wydajności</string>
+    <string name="power_control_governor">Regulator CPU</string>
+    <string name="power_control_current_frequencies">Bieżące częstotliwości</string>
+    <string name="power_control_frequencies">Ustawienia częstotliwości</string>
+    <string name="power_control_cpu_min_freq">Minimalna częstotliwość CPU</string>
+    <string name="power_control_cpu_max_freq">Maksymalna częstotliwość CPU</string>
+    <string name="power_control_gpu_freq">Częstotliwość GPU</string>
+    <string name="power_control_gpu_min_power">Minimalna moc GPU</string>
+    <string name="power_control_gpu_max_power">Maksymalna moc GPU</string>
+    <string name="power_control_ram_min_power">Minimalna częstotliwość RAM</string>
+    <string name="power_control_ram_max_power">Maksymalna częstotliwość RAM</string>
+    <string name="power_control_available_frequencies">Dostępne częstotliwości</string>
+    <string name="power_control_auto_tuning">Automatyczne dostrajanie</string>
+    <string name="power_control_auto_tuning_desc">Automatycznie dostosowuj wydajność na podstawie FPS</string>
+    <string name="power_control_tuning_strategy">Strategia dostrajania</string>
+    <string name="power_control_strategy_balanced">Zrównoważona</string>
+    <string name="power_control_strategy_balanced_desc">Dostosowuje wszystkie komponenty równomiernie dla najlepszej ogólnej wydajności</string>
+    <string name="power_control_strategy_power_efficient">Energooszczędna</string>
+    <string name="power_control_strategy_power_efficient_desc">Zmniejsza komponenty niebędące wąskim gardłem, aby oszczędzać energię</string>
+    <string name="power_control_strategy_aggressive">Agresywna</string>
+    <string name="power_control_strategy_aggressive_desc">Maksymalizuje wydajność wykrytych wąskich gardeł</string>
+    <string name="power_control_strategy_conservative">Konserwatywna</string>
+    <string name="power_control_strategy_conservative_desc">Stopniowe dostosowania z naciskiem na stabilność</string>
 </resources>
