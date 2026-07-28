@@ -20,4 +20,7 @@
     <string name="steam_store_screenshot_description">%1$s screenshot %2$d of %3$d</string>
     <string name="steam_store_previous_screenshot">Previous screenshot</string>
     <string name="steam_store_next_screenshot">Next screenshot</string>
+    <string name="steam_store_pinch_to_zoom">Pinch to zoom and drag to pan</string>
+    <string name="steam_store_zoom_badge">%1$d%%</string>
+    <string name="steam_store_zoom_percent">Zoom %1$d percent</string>
 </resources>

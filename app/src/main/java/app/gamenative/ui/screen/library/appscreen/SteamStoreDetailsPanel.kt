@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,10 +50,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,6 +74,7 @@ import app.gamenative.ui.component.LoadingScreen
 import app.gamenative.ui.util.SnackbarManager
 import com.skydoves.landscapist.ImageOptions
 import com.skydoves.landscapist.coil.CoilImage
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 private sealed interface SteamStoreDetailsUiState {
@@ -511,41 +520,139 @@ private fun SteamScreenshotPager(
     }
 
     fullScreenImage?.let { imageUrl ->
-        Dialog(
-            onDismissRequest = { fullScreenImage = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ZoomableScreenshotDialog(
+            imageUrl = imageUrl,
+            gameName = gameName,
+            onDismiss = { fullScreenImage = null },
+        )
+    }
+}
+
+@Composable
+private fun ZoomableScreenshotDialog(
+    imageUrl: String,
+    gameName: String,
+    onDismiss: () -> Unit,
+) {
+    var scale by remember(imageUrl) { mutableFloatStateOf(MIN_SCREENSHOT_SCALE) }
+    var offset by remember(imageUrl) { mutableStateOf(Offset.Zero) }
+    var viewportWidth by remember(imageUrl) { mutableIntStateOf(0) }
+    var viewportHeight by remember(imageUrl) { mutableIntStateOf(0) }
+    val zoomPercent = (scale * 100f).roundToInt()
+    val zoomStateDescription = stringResource(R.string.steam_store_zoom_percent, zoomPercent)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .onSizeChanged {
+                    viewportWidth = it.width
+                    viewportHeight = it.height
+                },
         ) {
-            Box(
+            CoilImage(
+                imageModel = { imageUrl },
+                imageOptions = ImageOptions(
+                    contentDescription = gameName,
+                    contentScale = ContentScale.Fit,
+                ),
+                loading = { LoadingScreen() },
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black),
+                    .semantics { stateDescription = zoomStateDescription }
+                    .pointerInput(imageUrl, viewportWidth, viewportHeight) {
+                        detectTransformGestures { centroid, pan, zoom, _ ->
+                            val oldScale = scale
+                            val newScale = (oldScale * zoom).coerceIn(
+                                MIN_SCREENSHOT_SCALE,
+                                MAX_SCREENSHOT_SCALE,
+                            )
+                            if (newScale == MIN_SCREENSHOT_SCALE) {
+                                scale = MIN_SCREENSHOT_SCALE
+                                offset = Offset.Zero
+                                return@detectTransformGestures
+                            }
+
+                            val viewportCenter = Offset(
+                                x = viewportWidth / 2f,
+                                y = viewportHeight / 2f,
+                            )
+                            val centroidAdjustment =
+                                (centroid - viewportCenter) * (1f - newScale / oldScale)
+                            val unclampedOffset = offset + pan + centroidAdjustment
+                            val maxOffsetX = viewportWidth * (newScale - 1f) / 2f
+                            val maxOffsetY = viewportHeight * (newScale - 1f) / 2f
+
+                            scale = newScale
+                            offset = Offset(
+                                x = unclampedOffset.x.coerceIn(-maxOffsetX, maxOffsetX),
+                                y = unclampedOffset.y.coerceIn(-maxOffsetY, maxOffsetY),
+                            )
+                        }
+                    }
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    },
+            )
+
+            Surface(
+                color = Color.Black.copy(alpha = 0.65f),
+                contentColor = Color.White,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp),
             ) {
-                CoilImage(
-                    imageModel = { imageUrl },
-                    imageOptions = ImageOptions(
-                        contentDescription = gameName,
-                        contentScale = ContentScale.Fit,
-                    ),
-                    loading = { LoadingScreen() },
-                    modifier = Modifier.fillMaxSize(),
+                Text(
+                    text = stringResource(R.string.steam_store_zoom_badge, zoomPercent),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                 )
-                IconButton(
-                    onClick = { fullScreenImage = null },
+            }
+
+            if (scale == MIN_SCREENSHOT_SCALE) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.65f),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(20.dp),
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(24.dp)),
+                        .align(Alignment.BottomCenter)
+                        .padding(24.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = stringResource(R.string.close),
-                        tint = Color.White,
+                    Text(
+                        text = stringResource(R.string.steam_store_pinch_to_zoom),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
                     )
                 }
+            }
+
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(24.dp)),
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = stringResource(R.string.close),
+                    tint = Color.White,
+                )
             }
         }
     }
 }
+
+private const val MIN_SCREENSHOT_SCALE = 1f
+private const val MAX_SCREENSHOT_SCALE = 5f
 
 private fun htmlToPlainText(html: String): String {
     if (html.isBlank()) return ""
