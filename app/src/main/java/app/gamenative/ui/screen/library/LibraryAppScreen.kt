@@ -552,6 +552,18 @@ private fun formatBytes(bytes: Long): String {
     }
 }
 
+// Keep source-specific UI behind this small wrapper. Passing a composable callback into
+// AppScreenContent makes its generated DEX method exceed verifier limits on some devices.
+@Composable
+private fun StoreDetailsSection(displayInfo: GameDisplayInfo) {
+    if (displayInfo.appId.startsWith("STEAM_") && displayInfo.gameId > 0) {
+        app.gamenative.ui.screen.library.appscreen.SteamStoreDetailsPanel(
+            appId = displayInfo.gameId,
+            modifier = Modifier.padding(top = 20.dp),
+        )
+    }
+}
+
 @Composable
 internal fun AppScreenContent(
     modifier: Modifier = Modifier,
@@ -571,7 +583,6 @@ internal fun AppScreenContent(
     onBack: () -> Unit = {},
     optionsMenu: List<AppMenuOption>,
     dialogOpen: Boolean = false,
-    sourceDetailsContent: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
     // reactive — recomposes when network state changes
@@ -1174,7 +1185,7 @@ internal fun AppScreenContent(
                     }
                 }
 
-                sourceDetailsContent()
+                StoreDetailsSection(displayInfo)
 
             }
         }

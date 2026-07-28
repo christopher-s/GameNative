@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -139,18 +138,6 @@ private fun buildNotEnoughSpaceState(context: Context, info: InstallSizeInfo): M
  * Steam-specific implementation of BaseAppScreen
  */
 class SteamAppScreen : BaseAppScreen() {
-
-    @Composable
-    override fun SourceDetailsContent(
-        context: Context,
-        libraryItem: LibraryItem,
-    ) {
-        SteamStoreDetailsPanel(
-            appId = libraryItem.gameId,
-            modifier = Modifier.padding(top = 20.dp),
-        )
-    }
-
     companion object {
         // Shared state for uninstall dialog - list of appIds that should show the dialog
         private val uninstallDialogAppIds = mutableStateListOf<String>()
