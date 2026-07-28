@@ -28,6 +28,16 @@
 
 ---
 
+> **This is a fork of [GameNative](https://github.com/utkarshdalal/GameNative)** that tracks upstream and adds:
+>
+> - **Accessible game storage** — games can be installed to a user-accessible storage location (or a custom storage root of your choice) instead of app-private storage, so you can browse, back up and mod game files with any file manager.
+> - **Steam Store details in-app** — the game screen shows cached Steam Store info (description, publishers, Metacritic score, release status) and a screenshot gallery with pinch-to-zoom — available offline once cached.
+> - **Side-by-side debug builds** — debug builds use a distinct application ID, so the fork can be installed next to the official app without clobbering it.
+>
+> Everything else — compatibility, features, cloud saves — matches upstream.
+
+---
+
 GameNative lets you run the PC games in your Steam, Epic and GOG libraries directly on Android — no streaming required. Your saves sync to the cloud, so you can stop on your PC and keep going on your phone.
 
 It's still early. Not every game runs yet, and some need tweaking to play well, but the community is constantly finding and sharing configs that work — and these get applied automatically. You can see if anyone has tried running your game successfully at https://gamenative.app/compatibility.
