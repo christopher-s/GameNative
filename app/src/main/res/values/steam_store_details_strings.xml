@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <!-- English fallback until community translations are added. -->
+    <string name="steam_store_details">Steam Store Details</string>
+    <string name="steam_store_loading">Loading Steam Store details…</string>
+    <string name="steam_store_load_error">Steam Store details could not be loaded.</string>
+    <string name="steam_store_retry">Retry</string>
+    <string name="steam_store_refresh">Refresh Steam Store details</string>
+    <string name="steam_store_open">Open Steam</string>
+    <string name="steam_store_open_failed">No app is available to open the Steam Store.</string>
+    <string name="steam_store_cached_notice">Showing cached details because Steam is unavailable.</string>
+    <string name="steam_store_coming_soon">Coming soon</string>
+    <string name="steam_store_metacritic_score">Metacritic %1$d</string>
+    <string name="steam_store_publishers">Publishers</string>
+    <string name="steam_store_about">About this game</string>
+    <string name="steam_store_show_more">Show more</string>
+    <string name="steam_store_show_less">Show less</string>
+    <string name="steam_store_screenshots">Screenshots</string>
+    <string name="steam_store_screenshot_counter">%1$d of %2$d</string>
+    <string name="steam_store_screenshot_description">%1$s screenshot %2$d of %3$d</string>
+    <string name="steam_store_previous_screenshot">Previous screenshot</string>
+    <string name="steam_store_next_screenshot">Next screenshot</string>
+</resources>

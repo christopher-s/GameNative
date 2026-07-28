@@ -571,6 +571,7 @@ internal fun AppScreenContent(
     onBack: () -> Unit = {},
     optionsMenu: List<AppMenuOption>,
     dialogOpen: Boolean = false,
+    sourceDetailsContent: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
     // reactive — recomposes when network state changes
@@ -1172,6 +1173,8 @@ internal fun AppScreenContent(
                         }
                     }
                 }
+
+                sourceDetailsContent()
 
             }
         }

@@ -303,6 +303,15 @@ abstract class BaseAppScreen {
     ): GameDisplayInfo
 
     /**
+     * Optional source-specific information rendered below the common game details.
+     */
+    @Composable
+    protected open fun SourceDetailsContent(
+        context: Context,
+        libraryItem: LibraryItem,
+    ) = Unit
+
+    /**
      * Check if the game is installed
      */
     abstract fun isInstalled(context: Context, libraryItem: LibraryItem): Boolean
@@ -1360,6 +1369,9 @@ abstract class BaseAppScreen {
             onBack = onBack,
             optionsMenu = optionsMenu,
             dialogOpen = showConfigDialog || manageModsRequested,
+            sourceDetailsContent = {
+                SourceDetailsContent(context, libraryItem)
+            },
         )
 
         if (showReadiness && launchActivity != null) {
