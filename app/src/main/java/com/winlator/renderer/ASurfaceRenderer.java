@@ -58,10 +58,10 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
     private int cachedDesktopSrcW = 0, cachedDesktopSrcH = 0;
     private Window desktopWindow = null;
     private final ArrayList<RenderableWindow> renderList = new ArrayList<>();
-    private float pendingFrameRate = 0f;
-    private byte pendingFrameRateCompatibility = 0;
-    private byte pendingFrameRateChangeStrategy = 0;
-    private boolean hasPendingFrameRateRequest = false;
+    private volatile float pendingFrameRate = 0f;
+    private volatile byte pendingFrameRateCompatibility = 0;
+    private volatile byte pendingFrameRateChangeStrategy = 0;
+    private volatile boolean hasPendingFrameRateRequest = false;
     private static class RenderableWindow {
         public Drawable content;
         public Window window;
@@ -674,7 +674,6 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
 
     public void setFrameRate(float frameRate, int compatibility, int changeStrategy) {
         Timber.d("setFrameRate frameRate=%f compatibility=%d changeStrategy=%d", frameRate, compatibility, changeStrategy);
-        if (frameRate > 0 && frameRate < 30) frameRate = 30;
         pendingFrameRate = frameRate;
         pendingFrameRateCompatibility = (byte) compatibility;
         pendingFrameRateChangeStrategy = (byte) changeStrategy;
