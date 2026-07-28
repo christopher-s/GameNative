@@ -83,6 +83,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import app.gamenative.BuildConfig
 import app.gamenative.R
 import app.gamenative.ui.util.SnackbarManager
+import app.gamenative.ui.util.deviceNativeResolution
+import app.gamenative.ui.util.evenRound
+import app.gamenative.ui.util.generateAdaptiveScreenSizes
 import app.gamenative.ui.component.dialog.state.MessageDialogState
 import app.gamenative.ui.component.settings.SettingsCPUList
 import app.gamenative.ui.component.settings.SettingsCenteredLabel
@@ -130,7 +133,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * Gets the component title for Win Components settings group.
@@ -150,42 +152,6 @@ internal fun winComponentsItemTitleRes(string: String): Int {
         "opengl" -> R.string.opengl
         else -> throw IllegalArgumentException("No string res found for Win Components title: $string")
     }
-}
-
-/**
- * Rounds a float value to the nearest even integer.
- * This is required by many mobile GPU drivers to avoid rendering artifacts or crashes
- * when using resolutions that are not divisible by 2.
- *
- * @param value The float value to be rounded.
- * @return The nearest even integer to the input value.
- */
-internal fun evenRound(value: Float): Int = (value / 2.0f).roundToInt() * 2
-
-/**
- * Calculates the greatest common divisor (GCD) of two integers using the Euclidean algorithm.
- *
- * @param a The first integer.
- * @param b The second integer.
- * @return The greatest common divisor of a and b.
- */
-internal fun gcd(a: Int, b: Int): Int = if (b == 0) a else gcd(b, a % b)
-
-/**
- * Calculates and formats the aspect ratio for a given resolution.
- * Handles special cases for common mobile aspect ratios like 19.5:9 and 21.5:9.
- *
- * @param width The width of the resolution in pixels.
- * @param height The height of the resolution in pixels.
- * @return A string representation of the aspect ratio (e.g., "16:9" or "19.5:9").
- */
-internal fun calculateAspectRatio(width: Int, height: Int): String {
-    val common = gcd(width, height)
-    val w = width / common
-    val h = height / common
-    if ((w == 13) && (h == 6)) return "19.5:9"
-    if ((w == 43) && (h == 18)) return "21.5:9"
-    return "$w:$h"
 }
 
 private data class ContainerConfigDialogStaticData(
@@ -252,38 +218,22 @@ private fun rememberContainerConfigDialogStaticData(): ContainerConfigDialogStat
             }
         }
 
-    val displayMetrics = context.resources.displayMetrics
-    val screenWidth = maxOf(displayMetrics.widthPixels, displayMetrics.heightPixels).toFloat()
-    val screenHeight = minOf(displayMetrics.widthPixels, displayMetrics.heightPixels).toFloat()
-
-    val nativeWidth = evenRound(screenWidth)
-    val nativeHeight = evenRound(screenHeight)
-    val nativeRes = "${nativeWidth}x$nativeHeight"
-    val nativeRatio = calculateAspectRatio(nativeWidth, nativeHeight)
-
-    val optimizedWidth = evenRound(screenWidth * 0.75f)
-    val optimizedHeight = evenRound(screenHeight * 0.75f)
-    val optimizedRes = "${optimizedWidth}x$optimizedHeight"
-    val optimizedRatio = calculateAspectRatio(optimizedWidth, optimizedHeight)
-
-    val halfWidth = evenRound(screenWidth * 0.5f)
-    val halfHeight = evenRound(screenHeight * 0.5f)
-    val halfRes = "${halfWidth}x$halfHeight"
-    val halfRatio = calculateAspectRatio(halfWidth, halfHeight)
+    // Heavy non-composable loads are remembered so a configuration change (which
+    // re-runs this whole function via LocalConfiguration) does not repeat them.
+    val gpuCards = remember { ContainerUtils.getGPUCards(context) }
+    val box64Presets = remember { Box86_64PresetManager.getPresets("box64", context) }
+    val fexcorePresets = remember { FEXCorePresetManager.getPresets(context) }
 
     val baseScreenSizes = stringArrayResource(R.array.screen_size_entries).toList()
-    val adaptiveScreenSizes = mutableListOf<String>()
-
-    // Add device specific resolutions if they don't exactly match existing presets
-    listOf(
-        Triple(nativeRes, nativeRatio, context.getString(R.string.resolution_native)),
-        Triple(optimizedRes, optimizedRatio, context.getString(R.string.resolution_optimized)),
-        Triple(halfRes, halfRatio, context.getString(R.string.resolution_half)),
-    ).forEach { (res, ratio, label) ->
-        if (baseScreenSizes.none { it.startsWith(res) }) {
-            adaptiveScreenSizes.add("$res ($ratio, $label)")
-        }
-    }
+    val (deviceWidth, deviceHeight) = deviceNativeResolution(context)
+    val adaptiveScreenSizes = generateAdaptiveScreenSizes(
+        deviceWidth = deviceWidth,
+        deviceHeight = deviceHeight,
+        baseScreenSizes = baseScreenSizes,
+        nativeLabel = stringResource(R.string.resolution_native),
+        optimizedLabel = stringResource(R.string.resolution_optimized),
+        halfLabel = stringResource(R.string.resolution_half),
+    )
 
     return ContainerConfigDialogStaticData(
         screenSizes = baseScreenSizes + adaptiveScreenSizes,
@@ -293,7 +243,7 @@ private fun rememberContainerConfigDialogStaticData(): ContainerConfigDialogStat
         dxvkVersionsBase = stringArrayResource(R.array.dxvk_version_entries).toList(),
         vkd3dVersionsBase = stringArrayResource(R.array.vkd3d_version_entries).toList(),
         audioDrivers = stringArrayResource(R.array.audio_driver_entries).toList(),
-        gpuCards = ContainerUtils.getGPUCards(context),
+        gpuCards = gpuCards,
         presentModes = stringArrayResource(R.array.present_mode_entries).toList(),
         rendererPresentModes = listOf("fifo", "mailbox"),
         resourceTypes = stringArrayResource(R.array.resource_type_entries).toList(),
@@ -314,9 +264,9 @@ private fun rememberContainerConfigDialogStaticData(): ContainerConfigDialogStat
         box64Versions = stringArrayResource(R.array.box64_version_entries).toList(),
         wowBox64VersionsBase = stringArrayResource(R.array.wowbox64_version_entries).toList(),
         box64BionicVersionsBase = stringArrayResource(R.array.box64_bionic_version_entries).toList(),
-        box64Presets = Box86_64PresetManager.getPresets("box64", context),
+        box64Presets = box64Presets,
         fexcoreVersionsBase = stringArrayResource(R.array.fexcore_version_entries).toList(),
-        fexcorePresets = FEXCorePresetManager.getPresets(context),
+        fexcorePresets = fexcorePresets,
         fexcoreTSOPresets = stringArrayResource(R.array.fexcore_preset_entries).toList(),
         fexcoreX87Presets = stringArrayResource(R.array.x87mode_preset_entries).toList(),
         fexcoreMultiblockValues = stringArrayResource(R.array.multiblock_values).toList(),
@@ -838,19 +788,19 @@ fun ContainerConfigDialog(
         }
 
         val screenSizeIndexRef = rememberSaveable {
-            val searchIndex = screenSizes.indexOfFirst { it.contains(config.screenSize) }
+            val searchIndex = screenSizes.indexOfFirst { it.substringBefore(' ') == config.screenSize }
             mutableIntStateOf(if (searchIndex > 0) searchIndex else 0)
         }
         var screenSizeIndex by screenSizeIndexRef
         val customScreenWidthRef = rememberSaveable {
-            val searchIndex = screenSizes.indexOfFirst { it.contains(config.screenSize) }
+            val searchIndex = screenSizes.indexOfFirst { it.substringBefore(' ') == config.screenSize }
             mutableStateOf(
                 if (searchIndex <= 0) config.screenSize.split("x").getOrElse(0) { "1280" } else "1280"
             )
         }
         var customScreenWidth by customScreenWidthRef
         val customScreenHeightRef = rememberSaveable {
-            val searchIndex = screenSizes.indexOfFirst { it.contains(config.screenSize) }
+            val searchIndex = screenSizes.indexOfFirst { it.substringBefore(' ') == config.screenSize }
             mutableStateOf(
                 if (searchIndex <= 0) config.screenSize.split("x").getOrElse(1) { "720" } else "720"
             )
@@ -1112,15 +1062,15 @@ fun ContainerConfigDialog(
 
         val applyScreenSizeToConfig: () -> Unit = {
             val screenSize = if (screenSizeIndex == 0) {
-                val widthInt = customScreenWidth.toIntOrNull() ?: 0
-                val heightInt = customScreenHeight.toIntOrNull() ?: 0
-                if (widthInt != 0 && heightInt != 0) {
-                    "${evenRound(widthInt.toFloat())}x${evenRound(heightInt.toFloat())}"
+                val width = evenRound((customScreenWidth.toIntOrNull() ?: 0).toFloat())
+                val height = evenRound((customScreenHeight.toIntOrNull() ?: 0).toFloat())
+                if (width > 0 && height > 0) {
+                    "${width}x$height"
                 } else {
                     config.screenSize
                 }
             } else {
-                screenSizes[screenSizeIndex].split(" ")[0]
+                screenSizes[screenSizeIndex.coerceIn(1, screenSizes.lastIndex)].split(" ")[0]
             }
             config = config.copy(screenSize = screenSize)
         }

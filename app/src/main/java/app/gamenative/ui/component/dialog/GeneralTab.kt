@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import app.gamenative.R
 import app.gamenative.ui.component.NoExtractOutlinedTextField
 import app.gamenative.ui.component.settings.SettingsListDropdown
+import app.gamenative.ui.util.evenRound
 import com.alorma.compose.settings.ui.SettingsSwitch
 import app.gamenative.ui.theme.settingsTileColors
 import app.gamenative.ui.theme.settingsTileColorsAlt
@@ -307,7 +308,7 @@ fun GeneralTabContent(
         SettingsListDropdown(
             colors = settingsTileColors(),
             title = { Text(text = stringResource(R.string.screen_size)) },
-            value = state.screenSizeIndex.value,
+            value = state.screenSizeIndex.value.coerceIn(0, state.screenSizes.lastIndex),
             items = state.screenSizes,
             onItemSelected = {
                 state.screenSizeIndex.value = it

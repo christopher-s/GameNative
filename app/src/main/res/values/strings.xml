@@ -2163,8 +2163,6 @@
     <string name="local_mod_copied_progress">Copied %1$s of %2$s</string>
     <string name="nexus_invalid_source_metadata">This managed mod has incomplete source information and cannot be retried.</string>
     <string name="nexus_archive_memory_error">Archive needs more memory than Android allows. Retry after updating GameNative or choose a smaller file.</string>
-    <string name="aspect_ratio_19_5_9">19.5:9</string>
-    <string name="aspect_ratio_21_5_9">21.5:9</string>
     <string name="language_schinese">Simplified Chinese</string>
     <string name="language_tchinese">Traditional Chinese</string>
     <string name="language_koreana">Korean</string>
