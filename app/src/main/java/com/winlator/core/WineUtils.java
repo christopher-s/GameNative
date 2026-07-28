@@ -35,19 +35,22 @@ public abstract class WineUtils {
         String zTarget = imagefsRoot.getAbsoluteFile().getCanonicalPath();
         FileUtils.symlink(zTarget, dosdevicesPath + "/z:");
 
+        File appStorageDir = new File(context.getDataDir(), "storage");
 
-        // Auto-fix containers missing D: and E: drives
+        // Add D: when absent and always normalize E: to this application's
+        // private storage. This also migrates containers copied from another
+        // application ID.
         String currentDrives = container.getDrives();
-        if (!currentDrives.contains("D:") || !currentDrives.contains("E:")) {
-            Log.d("WineUtils", "Container missing D: or E: drives, adding them...");
-            String missingDrives = "";
-            if (!currentDrives.contains("D:")) {
-                missingDrives += "D:" + android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
-            }
-            if (!currentDrives.contains("E:")) {
-                missingDrives += "E:/data/data/app.gamenative/storage";
-            }
-            String updatedDrives = missingDrives + currentDrives;
+        String updatedDrives = currentDrives;
+        if (!updatedDrives.contains("D:")) {
+            updatedDrives = Container.setDrivePath(
+                    updatedDrives,
+                    'D',
+                    android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
+            );
+        }
+        updatedDrives = Container.setDrivePath(updatedDrives, 'E', appStorageDir.getAbsolutePath());
+        if (!updatedDrives.equals(currentDrives)) {
             container.setDrives(updatedDrives);
             container.saveData();
             Log.d("WineUtils", "Updated container drives to: " + updatedDrives);
@@ -57,7 +60,7 @@ public abstract class WineUtils {
         for (String[] drive : container.drivesIterator()) {
             File linkTarget = new File(drive[1]);
             String path = linkTarget.getAbsolutePath();
-            if (!linkTarget.isDirectory() && path.endsWith("/app.gamenative/storage")) {
+            if (drive[0].equals("E") && !linkTarget.isDirectory()) {
                 linkTarget.mkdirs();
                 FileUtils.chmod(linkTarget, 0771);
             }
@@ -75,7 +78,7 @@ public abstract class WineUtils {
 
         // Create Steam symlink if we found the game directory
         if (gameDirectoryPath != null) {
-            // Extract game name from path like "/data/data/app.gamenative/Steam/steamapps/common/GameName"
+            // Extract the game name from the configured install path.
             String gameName = new File(gameDirectoryPath).getName();
 
             // Create the Steam directory structure in C: drive

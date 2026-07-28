@@ -2,7 +2,7 @@ package app.gamenative.service.gog
 
 import android.content.Context
 import android.net.Uri
-import app.gamenative.PrefManager
+import app.gamenative.utils.GameStoragePaths
 import java.io.File
 import java.nio.file.Paths
 import java.security.SecureRandom
@@ -125,15 +125,15 @@ object GOGConstants {
      */
     val externalGOGGamesPath: String
         get() {
-            val path = Paths.get(PrefManager.externalStoragePath, "GOG", "games", "common").toString()
+            val path = GameStoragePaths.gogInstallPath(GameStoragePaths.selectedExternalRoot)
             // Ensure directory exists for StatFs
-            File(path).mkdirs()
+            if (path.isNotBlank()) File(path).mkdirs()
             return path
         }
 
     val defaultGOGGamesPath: String
         get() {
-            return if (PrefManager.useExternalStorage && File(PrefManager.externalStoragePath).exists()) {
+            return if (GameStoragePaths.isExternalStorageReady) {
                 Timber.i("GOG using external storage: $externalGOGGamesPath")
                 externalGOGGamesPath
             } else {

@@ -61,6 +61,7 @@ private fun resolveVolumeRoot(context: Context, volumeId: String): String {
  */
 fun getPathFromTreeUri(context: Context, uri: Uri?): String? {
     if (uri == null) return null
+    if (uri.authority != "com.android.externalstorage.documents") return null
 
     return try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {

@@ -52,6 +52,7 @@ kls_database.db
 
 # Other
 /captures
+/.tmp-verification/
 .externalNativeBuild
 
 #Private keystore data

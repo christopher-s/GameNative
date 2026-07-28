@@ -25,6 +25,11 @@ object DownloadService {
             field = value
         }
 
+    // Primary app-scoped external files directory
+    // (/storage/emulated/0/Android/data/<package>/files).
+    var primaryExternalFilesPath: String = ""
+        private set
+
     // all mounted non-primary external volumes (SD cards, USB), discovered at init
     var externalVolumePaths: List<String> = emptyList()
         private set
@@ -35,6 +40,7 @@ object DownloadService {
         // Prefer the parent of external files dir (Android/data/<package>) so we can create siblings of /files
         val extFiles = context.getExternalFilesDir(null)
         baseExternalAppDirPath = extFiles?.parentFile?.path ?: ""
+        primaryExternalFilesPath = extFiles?.absolutePath ?: ""
 
         val sm = context.getSystemService(android.os.storage.StorageManager::class.java)
         externalVolumePaths = StorageUtils.getAllExternalFilesDirs(context)

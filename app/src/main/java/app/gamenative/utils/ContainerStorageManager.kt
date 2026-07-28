@@ -2,7 +2,6 @@ package app.gamenative.utils
 
 import android.content.Context
 import app.gamenative.PluviaApp
-import app.gamenative.PrefManager
 import app.gamenative.R
 import app.gamenative.data.GameSource
 import app.gamenative.data.LibraryItem
@@ -95,8 +94,8 @@ object ContainerStorageManager {
     }
 
     suspend fun getExternalVolumeInfo(context: Context): VolumeInfo? = withContext(Dispatchers.IO) {
-        if (!PrefManager.useExternalStorage) return@withContext null
-        val externalPath = PrefManager.externalStoragePath
+        if (!GameStoragePaths.isExternalStorageReady) return@withContext null
+        val externalPath = GameStoragePaths.selectedExternalRoot
         if (externalPath.isBlank() || !File(externalPath).isDirectory) return@withContext null
 
         try {
@@ -199,9 +198,7 @@ object ContainerStorageManager {
     }
 
     fun isExternalStorageConfigured(): Boolean {
-        return PrefManager.useExternalStorage &&
-            PrefManager.externalStoragePath.isNotBlank() &&
-            File(PrefManager.externalStoragePath).exists()
+        return GameStoragePaths.isExternalStorageReady
     }
 
     fun getStorageLocation(context: Context, entry: Entry): StorageLocation {
@@ -795,23 +792,23 @@ object ContainerStorageManager {
         }
 
         val externalRoots = buildList {
-            when (gameSource) {
-                GameSource.STEAM -> {
-                    if (PrefManager.externalStoragePath.isNotBlank()) {
-                        add(SteamService.externalAppInstallPath)
-                    }
-                    addAll(
-                        DownloadService.externalVolumePaths.map { volumePath ->
-                            Paths.get(volumePath, "Steam", "steamapps", "common").toString()
-                        },
-                    )
-                }
+            val storageRoots = buildList {
+                add(DownloadService.primaryExternalFilesPath)
+                add(GameStoragePaths.selectedExternalRoot)
+                addAll(DownloadService.externalVolumePaths)
+            }.filter { it.isNotBlank() }.distinct()
 
-                GameSource.GOG -> if (PrefManager.externalStoragePath.isNotBlank()) add(GOGConstants.externalGOGGamesPath)
-                GameSource.EPIC -> if (PrefManager.externalStoragePath.isNotBlank()) add(EpicConstants.externalEpicGamesPath())
-                GameSource.AMAZON -> if (PrefManager.externalStoragePath.isNotBlank()) add(AmazonConstants.externalAmazonGamesPath())
-                GameSource.CUSTOM_GAME -> Unit
-            }
+            addAll(
+                storageRoots.mapNotNull { storageRoot ->
+                    when (gameSource) {
+                        GameSource.STEAM -> GameStoragePaths.steamInstallPath(storageRoot)
+                        GameSource.GOG -> GameStoragePaths.gogInstallPath(storageRoot)
+                        GameSource.EPIC -> GameStoragePaths.epicInstallPath(storageRoot)
+                        GameSource.AMAZON -> GameStoragePaths.amazonInstallPath(storageRoot)
+                        GameSource.CUSTOM_GAME -> null
+                    }
+                },
+            )
 
             inferExternalInstallRoot(gameSource, normalizedPath)?.let(::add)
         }

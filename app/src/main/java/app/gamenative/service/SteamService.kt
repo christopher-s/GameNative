@@ -53,6 +53,7 @@ import app.gamenative.events.SteamEvent
 import app.gamenative.utils.CaseInsensitiveFileSystem
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.FileUtils
+import app.gamenative.utils.GameStoragePaths
 import app.gamenative.utils.LicenseSerializer
 import app.gamenative.utils.MarkerUtils
 import app.gamenative.utils.Net
@@ -74,7 +75,11 @@ import `in`.dragonbra.javasteam.enums.EPersonaState
 import `in`.dragonbra.javasteam.enums.EResult
 import `in`.dragonbra.javasteam.networking.steam3.ProtocolTypes
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesClientObjects.ECloudPendingRemoteOperation
+import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesCloudconfigstoreSteamclient
 import `in`.dragonbra.javasteam.protobufs.steamclient.SteammessagesFamilygroupsSteamclient
+import app.gamenative.data.SteamCollectionRepository
+import app.gamenative.steam.CloudConfigStoreService
+import app.gamenative.steam.SteamCollectionParser
 import `in`.dragonbra.javasteam.rpc.service.FamilyGroups
 import `in`.dragonbra.javasteam.steam.authentication.AuthPollResult
 import `in`.dragonbra.javasteam.steam.authentication.AuthSessionDetails
@@ -143,6 +148,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
+import okio.Path.Companion.toPath
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -290,6 +296,7 @@ class SteamService : Service(), IChallengeUrlChanged {
     private var picsGetProductInfoJob: Job? = null
     private var picsChangesCheckerJob: Job? = null
     private var friendCheckerJob: Job? = null
+    private var steamCollectionsJob: Job? = null
 
     private val _isPlayingBlocked = MutableStateFlow(false)
     val isPlayingBlocked = _isPlayingBlocked.asStateFlow()
@@ -443,35 +450,23 @@ class SteamService : Service(), IChallengeUrlChanged {
         val internalAppInstallPath: String
             get() = Paths.get(DownloadService.baseDataDirPath, "Steam", "steamapps", "common").pathString
 
-        /**
-         * Root used when "use external storage" is enabled. On legacy this is whatever the
-         * user picked in settings (SD card / USB). On modern we force the primary external
-         * app-scoped dir (/storage/emulated/0/Android/data/<pkg>/files) so no permission
-         * is needed. Falls back to the configured path if for some reason the primary
-         * external app dir isn't available yet (e.g. before populateDownloadService runs).
-         */
         private val externalAppInstallRoot: String
-            get() = if (BuildConfig.MODERN_ANDROID && DownloadService.baseExternalAppDirPath.isNotBlank()) {
-                DownloadService.baseExternalAppDirPath + "/files"
-            } else {
-                PrefManager.externalStoragePath
-            }
+            get() = GameStoragePaths.selectedExternalRoot
 
         val externalAppInstallPath: String
-            get() = Paths.get(externalAppInstallRoot, "Steam", "steamapps", "common").pathString
+            get() = GameStoragePaths.steamInstallPath(externalAppInstallRoot)
 
         // all install paths: internal + configured external + all mounted volumes
         val allInstallPaths: List<String>
             get() {
                 val paths = mutableListOf(internalAppInstallPath)
-                // only include configured external path if it's a real absolute path
-                if (PrefManager.externalStoragePath.isNotBlank()) {
-                    paths += externalAppInstallPath
-                }
-                for (volPath in DownloadService.externalVolumePaths) {
-                    if (volPath.isNotBlank()) {
-                        paths += Paths.get(volPath, "Steam", "steamapps", "common").pathString
-                    }
+                val externalRoots = buildList {
+                    add(DownloadService.primaryExternalFilesPath)
+                    add(GameStoragePaths.selectedExternalRoot)
+                    addAll(DownloadService.externalVolumePaths)
+                }.filter { it.isNotBlank() }.distinct()
+                for (root in externalRoots) {
+                    paths += GameStoragePaths.steamInstallPath(root)
                 }
                 return paths.distinct()
             }
@@ -482,16 +477,11 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
         private val externalAppStagingPath: String
             get() {
-                return Paths.get(externalAppInstallRoot, "Steam", "steamapps", "staging").pathString
+                return GameStoragePaths.steamStagingPath(externalAppInstallRoot)
             }
 
-        // True when "use external storage" is on AND the resolved external root is usable.
-        // Modern flavor always has a usable primary-external app-scoped root, so this is
-        // effectively just useExternalStorage on modern.
         private val externalStorageReady: Boolean
-            get() = PrefManager.useExternalStorage && File(externalAppInstallRoot).let {
-                it.path.isNotBlank() && it.exists()
-            }
+            get() = GameStoragePaths.isExternalStorageReady
 
         val defaultStoragePath: String
             get() {
@@ -520,7 +510,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         val defaultAppStagingPath: String
             get() {
-                return if (PrefManager.useExternalStorage) {
+                return if (externalStorageReady) {
                     externalAppStagingPath
                 } else {
                     internalAppStagingPath
@@ -932,11 +922,14 @@ class SteamService : Service(), IChallengeUrlChanged {
             hasSteamUnlockedBranch: Boolean = false,
         ): Map<Int, DepotInfo> {
             val dlcAppIdsWithSingleDepots = getDlcAppIdsWithSingleDepot(depots)
-            val eligible = eligibleDepots(depots, preferredLanguage, ownedDlc, licensedDepotIds)
+            val effectiveLanguage = SteamUtils.effectiveDepotLanguage(
+                depots, preferredLanguage, ownedDlc, licensedDepotIds, hasSteamUnlockedBranch,
+            )
+            val eligible = eligibleDepots(depots, effectiveLanguage, ownedDlc, licensedDepotIds)
             val has64Bit = eligible.any { it.osArch == OSArch.Arch64 }
             val hasNonDeckWin = eligible.any { !it.steamDeck && it.isWindowsCompatible }
             return depots.filter { (_, depot) ->
-                filterForDownloadableDepots(depot, has64Bit, hasNonDeckWin, preferredLanguage,
+                filterForDownloadableDepots(depot, has64Bit, hasNonDeckWin, effectiveLanguage,
                     ownedDlc, licensedDepotIds,
                     dlcAppIdsWithSingleDepots = dlcAppIdsWithSingleDepots
                 )
@@ -1005,18 +998,25 @@ class SteamService : Service(), IChallengeUrlChanged {
             val map = getMainAppDepots(appId, preferredLanguage).toMutableMap()
 
             // parent app's arch applies to DLC arch selection
-            val has64Bit = eligibleDepots(appInfo.depots, preferredLanguage, ownedDlc, licensedDepots)
+            val mainLanguage = SteamUtils.effectiveDepotLanguage(
+                appInfo.depots, preferredLanguage, ownedDlc, licensedDepots, hasSteamUnlockedBranch,
+            )
+            val has64Bit = eligibleDepots(appInfo.depots, mainLanguage, ownedDlc, licensedDepots)
                 .any { it.osArch == OSArch.Arch64 }
 
             val indirectDlcApps = getDownloadableDlcAppsOf(appId).orEmpty()
             indirectDlcApps.forEach { dlcApp ->
                 val dlcAppIdsWithSingleDepots = getDlcAppIdsWithSingleDepot(dlcApp.depots)
                 val dlcLicensedDepots = getLicensedDepotIds(dlcApp.id)
-                val dlcEligible = eligibleDepots(dlcApp.depots, preferredLanguage, null, dlcLicensedDepots)
+                // Resolve the DLC's own language too, so DLC that omits the container language installs.
+                val dlcLanguage = SteamUtils.effectiveDepotLanguage(
+                    dlcApp.depots, preferredLanguage, null, dlcLicensedDepots, hasSteamUnlockedBranch,
+                )
+                val dlcEligible = eligibleDepots(dlcApp.depots, dlcLanguage, null, dlcLicensedDepots)
                 val dlcHasNonDeckWin = dlcEligible.any { !it.steamDeck && it.isWindowsCompatible }
                 dlcApp.depots
                     .filter { (_, depot) ->
-                        filterForDownloadableDepots(depot, has64Bit, dlcHasNonDeckWin, preferredLanguage,
+                        filterForDownloadableDepots(depot, has64Bit, dlcHasNonDeckWin, dlcLanguage,
                             null, dlcLicensedDepots, hasSteamUnlockedBranch,
                             dlcAppIdsWithSingleDepots = dlcAppIdsWithSingleDepots
                         )
@@ -1829,6 +1829,9 @@ class SteamService : Service(), IChallengeUrlChanged {
                 notifyDownloadStarted(appId)
                 instance?.notifierOrNull?.trackDownload(di, getAppInfoOf(appId)?.name.orEmpty(), NotificationHelper.NOTIFICATION_ID_STEAM)
 
+                val chunkStagingRedirectDir = File(DownloadService.baseCacheDirPath, "depot_chunks/$appId")
+                    .takeIf { !appDirPath.startsWith(DownloadService.baseDataDirPath) }
+
                 val downloadJob = instance!!.scope.launch {
                     try {
                         // Get licenses from database
@@ -1848,6 +1851,11 @@ class SteamService : Service(), IChallengeUrlChanged {
                         Timber.i("maxDownloads: $maxDownloads")
                         Timber.i("maxDecompress: $maxDecompress")
 
+                        chunkStagingRedirectDir?.apply {
+                            deleteRecursively()
+                            mkdirs()
+                        }
+
                         // Create DepotDownloader instance
                         val depotDownloader = DepotDownloader(
                             instance!!.steamClient!!,
@@ -1858,7 +1866,10 @@ class SteamService : Service(), IChallengeUrlChanged {
                             maxDecompress = maxDecompress,
                             parentJob = coroutineContext[Job],
                             autoStartDownload = false,
-                            filesystem = CaseInsensitiveFileSystem(showDebugLog = false),
+                            filesystem = CaseInsensitiveFileSystem(
+                                showDebugLog = false,
+                                chunkStagingRedirect = chunkStagingRedirectDir?.absolutePath?.toPath(),
+                            ),
                         )
 
                         // Create listeners for DLC apps
@@ -2101,6 +2112,7 @@ class SteamService : Service(), IChallengeUrlChanged {
                     // handlers, and cancellations thrown out of suspension points.
                     // second call is a no-op if the inline path already removed the entry.
                     removeDownloadJob(appId)
+                    chunkStagingRedirectDir?.deleteRecursively()
                     if (throwable is kotlinx.coroutines.CancellationException) {
                         Timber.d(throwable, "Download canceled for app $appId")
                     }
@@ -2873,6 +2885,7 @@ class SteamService : Service(), IChallengeUrlChanged {
             PrefManager.clearSteamSessionPreferences()
             instance?.clearPendingSync()
             clearDatabase(clearCloudSyncState = clearCloudSyncState)
+            SteamCollectionRepository.clear()
         }
 
         private fun shouldClearUserDataForLoggedOnFailure(result: EResult): Boolean = when (result) {
@@ -2917,6 +2930,8 @@ class SteamService : Service(), IChallengeUrlChanged {
             instance?.picsGetProductInfoJob?.cancel()
             instance?.picsChangesCheckerJob?.cancel()
             instance?.friendCheckerJob?.cancel()
+            // Stop an in-flight collections fetch so a slow RPC can't repopulate the repo after logout.
+            instance?.steamCollectionsJob?.cancel()
         }
 
         private fun performLogOffDuties(clearCloudSyncState: Boolean = false) {
@@ -3739,6 +3754,9 @@ class SteamService : Service(), IChallengeUrlChanged {
                 // retrieve persona data of logged in user
                 scope.launch { requestUserPersona() }
 
+                // fetch the user's Steam collections for the library filter
+                steamCollectionsJob = scope.launch { fetchSteamCollections() }
+
                 // Request family share info if we have a familyGroupId.
                 if (callback.familyGroupId != 0L) {
                     scope.launch {
@@ -3794,7 +3812,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
             else -> {
                 if (shouldClearUserDataForLoggedOnFailure(callback.result)) {
-                    clearUserData()
+                    PrefManager.clearSteamSessionPreferences()
                 }
 
                 _loginResult = LoginResult.Failed
@@ -4039,6 +4057,79 @@ class SteamService : Service(), IChallengeUrlChanged {
 
                 val event = SteamEvent.PersonaStateReceived(localPersona.value)
                 PluviaApp.events.emit(event)
+            }
+        }
+    }
+
+    /**
+     * Downloads the user's Steam collections from CloudConfigStore and publishes the
+     * parsed static collections to [SteamCollectionRepository] for the library filter.
+     */
+    internal suspend fun fetchSteamCollections() {
+        val client = steamClient
+        val fetchSteamId = client?.steamID?.convertToUInt64()
+        // Same login + account as when we started, so a slow RPC can't cross accounts.
+        fun sameSession() = isLoggedIn && steamClient?.steamID?.convertToUInt64() == fetchSteamId
+        val um = client?.getHandler<SteamUnifiedMessages>()
+        if (um == null) {
+            Timber.tag("SteamCollections").w("UnifiedMessages handler unavailable; cannot fetch collections")
+            return
+        }
+        // A registered service is required: JavaSteam routes ServiceMethodResponse packets by
+        // service name, so the generic sendMessage alone never receives the reply.
+        val service = try {
+            um.createService(CloudConfigStoreService::class.java)
+        } catch (t: Throwable) {
+            Timber.tag("SteamCollections").e(t, "Cannot create CloudConfigStore service; keeping cached snapshot")
+            return
+        }
+
+        val request = SteammessagesCloudconfigstoreSteamclient.CCloudConfigStore_Download_Request.newBuilder()
+            .addVersions(
+                SteammessagesCloudconfigstoreSteamclient.CCloudConfigStore_NamespaceVersion.newBuilder()
+                    .setEnamespace(1) // user collections namespace
+                    .setVersion(0L), // 0 = full download
+            )
+            .build()
+
+        // Reply can be starved or dropped during the post-login PICS burst; retry with backoff.
+        val backoffsMs = longArrayOf(3_000L, 8_000L, 20_000L)
+        val maxAttempts = backoffsMs.size + 1
+        repeat(maxAttempts) { attempt ->
+            if (!sameSession()) return
+            try {
+                val job = service.download(request)
+                job.timeout = 30_000L
+                val response = job.toFuture().await()
+
+                val body = response.body.build()
+                val rawEntries = body.dataList.flatMap { ns ->
+                    ns.entriesList.map { entry ->
+                        SteamCollectionParser.RawEntry(
+                            key = entry.key,
+                            value = entry.value,
+                            isDeleted = entry.isDeleted,
+                        )
+                    }
+                }
+
+                val parsed = SteamCollectionParser.parse(rawEntries)
+                Timber.tag("SteamCollections").i(
+                    "Fetched ${parsed.collections.size} Steam collections " +
+                        "(${parsed.skippedDynamicCount} dynamic skipped) on attempt ${attempt + 1}",
+                )
+                if (sameSession()) SteamCollectionRepository.update(parsed)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                val lastAttempt = attempt == maxAttempts - 1
+                Timber.tag("SteamCollections").w(
+                    t,
+                    "Steam collections fetch attempt ${attempt + 1}/$maxAttempts failed" +
+                        if (lastAttempt) "; keeping cached snapshot" else "; retrying",
+                )
+                if (!lastAttempt) delay(backoffsMs[attempt])
             }
         }
     }
