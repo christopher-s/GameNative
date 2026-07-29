@@ -341,7 +341,7 @@ fun QuickMenu(
         )
     }
 
-    val isPowerControlAvailable = remember { PowerManager.isPServerAvailable() }
+    val isPowerControlAvailable = remember { PowerManager.isDriverAvailable() }
 
     var selectedTab by rememberSaveable {
         mutableIntStateOf(

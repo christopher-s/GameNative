@@ -2,6 +2,7 @@ package app.gamenative.powercontrol.drivers
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.Parcel
 import app.gamenative.powercontrol.PowerManager
@@ -11,6 +12,8 @@ import app.gamenative.powercontrol.profiles.PerformancePreset
 import timber.log.Timber
 import java.io.File
 import java.nio.charset.Charset
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Performance driver implementation for devices with PServer support
@@ -49,18 +52,40 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
         PRIME          // Highest frequency core(s)
     }
 
-    // PServer binder interface
-    private val binder: IBinder?
+    private val binderLock = Any()
+    @Volatile
+    private var binder: IBinder? = null
+    private var binderDeathRecipient: IBinder.DeathRecipient? = null
+    @Volatile
     private var isPServerAvailable: Boolean = false
     private val isGpuAvailable: Boolean
 
-    // Track modified sysfs files for permission restoration
-    private val modifiedSysfsFiles = mutableSetOf<String>()
+    private val originalSysfsModes = mutableMapOf<String, String>()
 
-    // Batch update support
-    private var batchCommands = mutableListOf<String>()
-    private var batchFilePaths = mutableSetOf<String>()
+    // Serializes batch sessions and all sysfs writes (auto-tuner thread vs UI threads)
+    private val batchLock = ReentrantLock()
+
+    // Batch update support - only touched under batchLock
+    private val batchCommands = mutableListOf<String>()
+    private val batchFilePaths = mutableSetOf<String>()
+    private val batchSnapshots = mutableMapOf<String, String>()
+    private val batchFirstMutationPaths = mutableListOf<String>()
     private var isBatchMode = false
+    private var batchFailed = false
+
+    // Values staged by batch-mode setters; applied to cached state only on commit success
+    private var batchPendingMin: Long? = null
+    private var batchPendingMax: Long? = null
+    private var batchPendingGovernor: String? = null
+    private var batchPendingGpuMin: Int? = null
+    private var batchPendingGpuMax: Int? = null
+
+    // Original per-policy state captured before first modification, restored in stop()
+    private data class PolicySnapshot(val governor: String, val minFreq: Long, val maxFreq: Long)
+    private val originalPolicyStates = mutableMapOf<String, PolicySnapshot>()
+    private data class GpuSnapshot(val minPowerLevel: Int, val maxPowerLevel: Int)
+    private var originalGpuState: GpuSnapshot? = null
+    private var baselineState = PServerSessionBaselineState.INVALID
 
     // CPU policies discovered at initialization (reduces redundant IPC calls)
     private var cpuPolicies: List<CpuPolicy> = emptyList()
@@ -80,19 +105,11 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     private var currentMinCpuFreq: Long = 0L
     private var currentMaxCpuFreq: Long = 0L
     private var currentGovernor: String = ""
+    private var currentMinGpuSysfsLevel: Int? = null
+    private var currentMaxGpuSysfsLevel: Int? = null
 
     init {
-        binder = runCatching {
-            val serviceManager = Class.forName("android.os.ServiceManager")
-            val getService = serviceManager.getDeclaredMethod("getService", String::class.java)
-            val rawBinder = getService.invoke(serviceManager, "PServerBinder") as IBinder
-            isPServerAvailable = true
-            Timber.tag(TAG).i("PServer service found and available")
-            rawBinder
-        }.getOrElse {
-            Timber.tag(TAG).w("Root service not available: ${it.message}")
-            null
-        }
+        connectToPServer()
 
         // Check GPU support once during initialization
         isGpuAvailable = try {
@@ -114,7 +131,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * Check if PServer driver is available on this device
      */
     override fun isDriverSupported(): Boolean {
-        return isPServerAvailable
+        return connectToPServer() != null
     }
 
     /**
@@ -132,14 +149,6 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     }
 
     /**
-     * Check if fan control is supported
-     * Currently not implemented for PServer devices
-     */
-    override fun isFanSupported(): Boolean {
-        return false
-    }
-
-    /**
      * Get display unit for frequency values
      * Returns HZ for formatted display (e.g., 2.4 GHz)
      */
@@ -152,9 +161,16 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * Collects commands to execute in a single root call for better performance.
      */
     override fun beginUpdate() {
-        batchCommands.clear()
-        batchFilePaths.clear()
-        isBatchMode = true
+        batchLock.lock()
+        try {
+            check(!isBatchMode) { "A PServer update is already in progress" }
+            clearBatchState()
+            check(ensureRestorableBaseline()) { "PServer baseline is unavailable" }
+            isBatchMode = true
+        } catch (throwable: Throwable) {
+            batchLock.unlock()
+            throw throwable
+        }
     }
 
     /**
@@ -162,10 +178,33 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * Writes commands to a temporary shell script and executes it to avoid Binder size limits.
      */
     override fun commit(): Boolean {
-        if (!isBatchMode || batchCommands.isEmpty()) {
-            isBatchMode = false
-            return true
+        val acquiredHere = !batchLock.isHeldByCurrentThread
+        if (acquiredHere) batchLock.lock()
+        try {
+            if (!isBatchMode) {
+                return true
+            }
+            if (!baselineState.isValid) return false
+            if (batchFailed) return false
+            if (batchCommands.isEmpty()) return true
+            return commitLocked()
+        } finally {
+            if (isBatchMode) clearBatchState()
+            if (batchLock.isHeldByCurrentThread) batchLock.unlock()
         }
+    }
+
+    override fun cancelUpdate() {
+        val acquiredHere = !batchLock.isHeldByCurrentThread
+        if (acquiredHere) batchLock.lock()
+        try {
+            clearBatchState()
+        } finally {
+            batchLock.unlock()
+        }
+    }
+
+    private fun commitLocked(): Boolean {
 
         var scriptFile: File? = null
         return try {
@@ -176,47 +215,24 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
                 File("/data/local/tmp/pserver_batch_${System.currentTimeMillis()}.sh")
             }
 
-            // Write script content directly to file
-            val scriptContent = buildString {
-                appendLine("#!/system/bin/sh")
-
-                // First, make all files writable in a single chmod command
-                if (batchFilePaths.isNotEmpty()) {
-                    val paths = batchFilePaths.joinToString(" ") { "'$it'" }
-                    appendLine("chmod 644 $paths")
-                }
-
-                // Execute all the actual commands (echo operations)
-                for (cmd in batchCommands) {
-                    appendLine(cmd)
-                }
-
-                // Finally, make all files read-only in a single chmod command
-                if (batchFilePaths.isNotEmpty()) {
-                    val paths = batchFilePaths.joinToString(" ") { "'$it'" }
-                    appendLine("chmod 444 $paths")
-                }
-            }
+            val commands = buildBatchCommands() ?: return false
+            val scriptContent = buildFailFastPServerScript(batchFilePaths, commands)
 
             try {
                 scriptFile.writeText(scriptContent)
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Failed to write batch script to ${scriptFile.absolutePath}")
-                batchCommands.clear()
-                isBatchMode = false
                 return false
             }
 
             // Make script executable and run it
-            val chmodResult = executeAsRoot("chmod 755 '${scriptFile.absolutePath}'")
+            val chmodResult = executeCheckedAsRoot("chmod 755 '${scriptFile.absolutePath}'")
             if (chmodResult.isFailure) {
                 Timber.tag(TAG).e("Failed to chmod batch script: ${chmodResult.exceptionOrNull()?.message}")
-                batchCommands.clear()
-                isBatchMode = false
                 return false
             }
 
-            val execResult = executeAsRoot("/system/bin/sh '${scriptFile.absolutePath}'")
+            val execResult = executeCheckedAsRoot("/system/bin/sh '${scriptFile.absolutePath}'")
             val success = execResult.isSuccess
 
             if (execResult.isFailure) {
@@ -224,17 +240,35 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
             } else {
                 // When using auto-tuning, this log can spam around, suppress it
                 if (PowerManager.currentProfile?.enableAutoTuning == false) {
-                    Timber.tag(TAG).d("Successfully executed ${batchCommands.size} batched commands")
+                    Timber.tag(TAG).d("Successfully executed ${commands.size} batched commands")
                 }
             }
 
-            batchCommands.clear()
-            isBatchMode = false
+            if (success) {
+                batchPendingMin?.let { targetMin ->
+                    currentMinCpuFreq = targetMin
+                    if (batchPendingMax == null && currentMaxCpuFreq < targetMin) {
+                        currentMaxCpuFreq = targetMin
+                    }
+                }
+                batchPendingMax?.let { targetMax ->
+                    currentMaxCpuFreq = targetMax
+                    if (batchPendingMin == null && currentMinCpuFreq > targetMax) {
+                        currentMinCpuFreq = targetMax
+                    }
+                }
+                batchPendingGovernor?.let { currentGovernor = it }
+                batchPendingGpuMin?.let { currentMinGpuSysfsLevel = it }
+                batchPendingGpuMax?.let { currentMaxGpuSysfsLevel = it }
+            } else if (!rollbackBatchLocked()) {
+                Timber.tag(TAG).e("Failed to restore PServer state after batch failure")
+            }
             success
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to commit batch update")
-            batchCommands.clear()
-            isBatchMode = false
+            if (!rollbackBatchLocked()) {
+                Timber.tag(TAG).e("Failed to restore PServer state after batch exception")
+            }
             false
         } finally {
             // Clean up script file
@@ -246,108 +280,179 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
         }
     }
 
+    private fun clearBatchState() {
+        batchCommands.clear()
+        batchFilePaths.clear()
+        batchSnapshots.clear()
+        batchFirstMutationPaths.clear()
+        batchPendingMin = null
+        batchPendingMax = null
+        batchPendingGovernor = null
+        batchPendingGpuMin = null
+        batchPendingGpuMax = null
+        batchFailed = false
+        isBatchMode = false
+    }
+
+    private fun buildBatchCommands(): List<String>? {
+        if (batchPendingMin == null && batchPendingMax == null) return batchCommands
+
+        val cpuBoundPaths = if (cpuPolicies.isNotEmpty()) {
+            cpuPolicies.flatMap { listOf(it.minFreqPath, it.maxFreqPath) }
+        } else {
+            (0 until getNumCpus()).flatMap { cpu ->
+                listOf(
+                    "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_min_freq",
+                    "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_max_freq",
+                )
+            }
+        }.toSet()
+        val nonBoundCommands = batchCommands.filterNot { command ->
+            cpuBoundPaths.any { path -> command.endsWith(" > '$path'") }
+        }
+        val boundCommands = mutableListOf<String>()
+        val policyPaths = if (cpuPolicies.isNotEmpty()) {
+            cpuPolicies.map { policy ->
+                Triple(policy.minFreqPath, policy.maxFreqPath, policy.maxFrequency)
+            }
+        } else {
+            (0 until getNumCpus()).map { cpu ->
+                Triple(
+                    "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_min_freq",
+                    "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_max_freq",
+                    0L,
+                )
+            }
+        }
+        for ((minPath, maxPath, policyMax) in policyPaths) {
+            val currentMin = readSysfsFile(minPath)?.toLongOrNull() ?: return null
+            val currentMax = readSysfsFile(maxPath)?.toLongOrNull() ?: return null
+            val targetBounds = resolveCpuBounds(currentMin, currentMax, policyMax) ?: return null
+            boundCommands += buildPServerBoundWriteCommands(
+                minPath = minPath,
+                maxPath = maxPath,
+                currentMin = currentMin,
+                currentMax = currentMax,
+                targetMin = targetBounds.first,
+                targetMax = targetBounds.second,
+                minMustNotExceedMax = true,
+            )
+        }
+        return nonBoundCommands + boundCommands
+    }
+
+    private fun resolveCpuBounds(
+        currentMin: Long,
+        currentMax: Long,
+        policyMax: Long,
+    ): Pair<Long, Long>? {
+        fun capToPolicyMax(value: Long): Long = if (policyMax > 0) minOf(value, policyMax) else value
+
+        var targetMin = batchPendingMin?.let(::capToPolicyMax) ?: currentMin
+        var targetMax = batchPendingMax?.let(::capToPolicyMax) ?: currentMax
+        if (batchPendingMin != null && batchPendingMax == null) targetMax = maxOf(targetMax, targetMin)
+        if (batchPendingMax != null && batchPendingMin == null) targetMin = minOf(targetMin, targetMax)
+        return if (targetMin <= targetMax) targetMin to targetMax else null
+    }
+
+    private fun runInSingleOperationTransaction(block: () -> Boolean): Boolean {
+        if (isBatchMode) return block()
+
+        beginUpdate()
+        return try {
+            if (block()) commit() else {
+                cancelUpdate()
+                false
+            }
+        } catch (throwable: Throwable) {
+            cancelUpdate()
+            throw throwable
+        }
+    }
+
+    private fun rollbackBatchLocked(): Boolean {
+        if (batchSnapshots.isEmpty()) return true
+
+        val rollbackEntries = buildPServerRollbackEntries(
+            mutationPaths = batchFirstMutationPaths,
+            snapshots = batchSnapshots,
+            modes = originalSysfsModes,
+        ) ?: return false
+        return executeCheckedAsRoot(buildPServerRollbackScript(rollbackEntries)).isSuccess
+    }
+
     /**
      * Start the performance driver.
      * Validates CPU frequency scaling support and discovers CPU policies.
      */
     override fun start() {
-        // Discover CPU policies if not already done
-        if (cpuPolicies.isEmpty()) {
-            validateCpuFreqSupport()
-            cpuPolicies = discoverCpuPolicies()
-            cpuClusters = identifyCpuClusters()
+        batchLock.withLock {
+            if (cpuPolicies.isEmpty()) {
+                validateCpuFreqSupport()
+                cpuPolicies = discoverCpuPolicies()
+                cpuClusters = identifyCpuClusters()
+            }
+
+            if (!captureSessionBaseline()) {
+                Timber.tag(TAG).e("Unable to capture complete original PServer state")
+            }
         }
     }
 
     /**
      * Stop the performance driver
-     * Restores CPU governor to first available governor and all modified sysfs files to 644 permissions
-     * Runs asynchronously on a background thread
+     * Restores the original CPU policy state and modified sysfs permissions
      */
     override fun stop() {
-        if (!isPServerAvailable) {
-            Timber.tag(TAG).w("PServer not available to restore settings")
-            return
-        }
-
-        // Run restoration on background thread to avoid blocking
-        Thread {
-            try {
-                // Reset CPU frequencies to maximum before changing governor
-                // This prevents device from staying slow if it was in Power Save mode
-                try {
-                    val availableFrequencies = getAvailableCpuFrequencies()
-                    if (availableFrequencies.isNotEmpty()) {
-                        val minFreq = availableFrequencies.first()
-                        val maxFreq = availableFrequencies.last()
-                        Timber.tag(TAG).d("Resetting CPU frequencies to full range: $minFreq - $maxFreq")
-                        setMinCpuValue(minFreq)
-                        setMaxCpuValue(maxFreq)
-                    }
-                } catch (e: Exception) {
-                    Timber.tag(TAG).e(e, "Failed to reset CPU frequencies")
+        batchLock.withLock {
+            clearBatchState()
+            if (connectToPServer() == null) {
+                Timber.tag(TAG).w("PServer not available to restore settings")
+            } else {
+                val cpuRestored = restoreCpuState()
+                val gpuRestored = restoreGpuState()
+                val modesRestored = restoreSysfsModes()
+                val affinityRestored = resetAppCpuAffinity()
+                if (!cpuRestored || !gpuRestored || !modesRestored || !affinityRestored) {
+                    Timber.tag(TAG).e("PServer restoration failed; discarding session baseline")
                 }
-
-                // Reset GPU power levels to maximum if supported
-                // This prevents GPU from staying throttled
-                if (isGpuSupported()) {
-                    try {
-                        val maxGpuLevel = getNumGpuPowerLevels() - 1
-                        Timber.tag(TAG).d("Resetting GPU power levels to full range: 0 - $maxGpuLevel")
-                        setMinGpuPowerLevel(0)
-                        setMaxGpuPowerLevel(maxGpuLevel)
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(e, "Failed to reset GPU power levels")
-                    }
-                }
-
-                // Restore governor to first available (typically the default/recommended one)
-                try {
-                    val availableGovernors = getAvailableGovernors()
-                    if (availableGovernors.isNotEmpty()) {
-                        val defaultGovernor = availableGovernors.first()
-                        Timber.tag(TAG).d("Restoring governor to $defaultGovernor")
-                        setGovernor(defaultGovernor)
-
-                        // Restore governor file permissions to 644 (setGovernor sets them to 444)
-                        val numCpus = getNumCpus()
-                        for (cpu in 0 until numCpus) {
-                            modifiedSysfsFiles.add("$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_governor")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Timber.tag(TAG).e(e, "Failed to restore governor")
-                }
-
-                // Restore file permissions - concatenate all chmod commands for faster execution
-                if (modifiedSysfsFiles.isNotEmpty()) {
-                    try {
-                        val chmodCommands = modifiedSysfsFiles.joinToString("; ") { path ->
-                            "chmod 644 '$path'"
-                        }
-                        val result = executeAsRoot(chmodCommands)
-                        if (result.isSuccess) {
-                            Timber.tag(TAG).d("Restored permissions for ${modifiedSysfsFiles.size} files")
-                        } else {
-                            Timber.tag(TAG).e("Failed to restore permissions: ${result.exceptionOrNull()?.message}")
-                        }
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(e, "Failed to restore permissions")
-                    }
-                }
-
-                modifiedSysfsFiles.clear()
-
-                // Reset app process CPU affinity to all cores
-                resetAppCpuAffinity()
-
-                // Clear CPU policies and clusters to force re-discovery on next start()
-                cpuPolicies = emptyList()
-                cpuClusters = emptyMap()
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Failed to stop PServerDriver")
             }
-        }.start()
+            clearSessionBaseline()
+            cpuPolicies = emptyList()
+            cpuClusters = emptyMap()
+        }
+    }
+
+    private fun restoreCpuState(): Boolean {
+        if (!hasCompleteCpuPolicySnapshot()) return false
+
+        var restored = true
+        for (policy in cpuPolicies) {
+            val snapshot = originalPolicyStates[policy.governorPath] ?: continue
+            restored = restoreCpuBounds(policy, snapshot) && restored
+            if (snapshot.governor.isNotEmpty()) {
+                restored = writeSysfsFile(policy.governorPath, snapshot.governor) && restored
+            }
+        }
+        return restored
+    }
+
+    private fun restoreCpuBounds(policy: CpuPolicy, snapshot: PolicySnapshot): Boolean {
+        val currentMin = readSysfsFile(policy.minFreqPath)?.toLongOrNull() ?: return false
+        val currentMax = readSysfsFile(policy.maxFreqPath)?.toLongOrNull() ?: return false
+        return orderedPServerBoundWrites(
+            currentMin = currentMin,
+            currentMax = currentMax,
+            targetMin = snapshot.minFreq,
+            targetMax = snapshot.maxFreq,
+            minMustNotExceedMax = true,
+        ).all { bound ->
+            if (bound == PServerBound.MIN) {
+                writeSysfsFile(policy.minFreqPath, snapshot.minFreq.toString())
+            } else {
+                writeSysfsFile(policy.maxFreqPath, snapshot.maxFreq.toString())
+            }
+        }
     }
 
     // ========================================
@@ -443,66 +548,36 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * Set CPU governor for all CPU cores.
      * Uses policy-based approach to reduce IPC calls by 50-75%.
      */
-    override fun setGovernor(governor: String): Boolean {
+    override fun setGovernor(governor: String): Boolean = batchLock.withLock {
+        runInSingleOperationTransaction { stageGovernor(governor) }
+    }
+
+    private fun stageGovernor(governor: String): Boolean {
         return try {
+            if (!ensureRestorableBaseline()) return false
+
             // Use policy-based approach if policies are discovered
             if (cpuPolicies.isNotEmpty()) {
-                if (isBatchMode) {
-                    for (policy in cpuPolicies) {
-                        batchFilePaths.add(policy.governorPath)
-                        batchCommands.add("echo '$governor' > '${policy.governorPath}'")
-                        // Set governor file to read-only (444) to prevent system from changing it
-                        batchCommands.add("chmod 444 '${policy.governorPath}'")
-                        modifiedSysfsFiles.add(policy.governorPath)
-                    }
-                    currentGovernor = governor
-                    return true
-                }
-
-                var success = true
                 for (policy in cpuPolicies) {
-                    if (!writeSysfsFile(policy.governorPath, governor)) {
-                        success = false
-                        Timber.tag(TAG).e(
-                            "Failed to set governor for policy ${policy.policyId} " +
-                            "(CPUs: ${policy.cpuCores.joinToString()})"
-                        )
-                    } else {
-                        Timber.tag(TAG).d(
-                            "Set governor to '$governor' for policy ${policy.policyId} " +
-                            "(CPUs: ${policy.cpuCores.joinToString()})"
-                        )
-                    }
+                    if (!captureBatchSnapshot(policy.governorPath)) return false
+                    batchFilePaths.add(policy.governorPath)
+                    batchCommands.add("echo '$governor' > '${policy.governorPath}'")
                 }
-                if (success) {
-                    currentGovernor = governor
-                }
-                return success
+                batchPendingGovernor = governor
+                return true
             }
 
             // Fallback: per-CPU approach (legacy behavior)
             val numCpus = getNumCpus()
 
-            if (isBatchMode) {
-                for (cpu in 0 until numCpus) {
-                    val path = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_governor"
-                    batchFilePaths.add(path)
-                    batchCommands.add("echo '$governor' > '$path'")
-                    modifiedSysfsFiles.add(path)
-                }
-                return true
-            }
-
-            var success = true
             for (cpu in 0 until numCpus) {
                 val path = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_governor"
-                if (!writeSysfsFile(path, governor)) {
-                    success = false
-                    Timber.tag(TAG).e("Failed to set governor for CPU $cpu")
-                }
+                if (!captureBatchSnapshot(path)) return false
+                batchFilePaths.add(path)
+                batchCommands.add("echo '$governor' > '$path'")
             }
-
-            success
+            batchPendingGovernor = governor
+            true
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to set governor")
             false
@@ -511,170 +586,61 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
 
     /**
      * Set minimum CPU frequency in KHz.
-     * Uses policy-based approach to reduce IPC calls by 50-75%.
      */
-    override fun setMinCpuValue(value: Long): Boolean {
-        return try {
-            // Use policy-based approach if policies are discovered
-            if (cpuPolicies.isNotEmpty()) {
-                if (isBatchMode) {
-                    for (policy in cpuPolicies) {
-                        // Cap at policy's max frequency
-                        val cappedValue = if (policy.maxFrequency > 0) {
-                            minOf(value, policy.maxFrequency)
-                        } else {
-                            value
-                        }
-                        batchFilePaths.add(policy.minFreqPath)
-                        batchCommands.add("echo '$cappedValue' > '${policy.minFreqPath}'")
-                        modifiedSysfsFiles.add(policy.minFreqPath)
-                    }
-                    currentMinCpuFreq = value
-                    return true
-                }
-
-                var success = true
-                for (policy in cpuPolicies) {
-                    // Cap at policy's max frequency
-                    val cappedValue = if (policy.maxFrequency > 0) {
-                        minOf(value, policy.maxFrequency)
-                    } else {
-                        value
-                    }
-
-                    if (!writeSysfsFile(policy.minFreqPath, cappedValue.toString())) {
-                        success = false
-                        Timber.tag(TAG).e("Failed to set min freq for policy ${policy.policyId}")
-                    } else {
-                        if (cappedValue != value) {
-                            Timber.tag(TAG).d(
-                                "Set min freq to $cappedValue (capped from $value) for policy ${policy.policyId} " +
-                                "(CPUs: ${policy.cpuCores.joinToString()}, max: ${policy.maxFrequency})"
-                            )
-                        } else {
-                            Timber.tag(TAG).d(
-                                "Set min freq to $value for policy ${policy.policyId} " +
-                                "(CPUs: ${policy.cpuCores.joinToString()})"
-                            )
-                        }
-                    }
-                }
-                if (success) {
-                    currentMinCpuFreq = value
-                }
-                return success
-            }
-
-            // Fallback: per-CPU approach (legacy behavior)
-            val numCpus = getNumCpus()
-
-            if (isBatchMode) {
-                for (cpu in 0 until numCpus) {
-                    val path = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_min_freq"
-                    batchFilePaths.add(path)
-                    batchCommands.add("echo '$value' > '$path'")
-                    modifiedSysfsFiles.add(path)
-                }
-                return true
-            }
-
-            var success = true
-            for (cpu in 0 until numCpus) {
-                val path = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_min_freq"
-                if (!writeSysfsFile(path, value.toString())) {
-                    success = false
-                    Timber.tag(TAG).e("Failed to set min frequency for CPU $cpu")
-                }
-            }
-
-            success
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed to set min frequency")
-            false
-        }
+    override fun setMinCpuValue(value: Long): Boolean = batchLock.withLock {
+        runInSingleOperationTransaction { stageCpuFreq(isMin = true, value = value) }
     }
 
     /**
      * Set maximum CPU frequency in KHz.
-     * Uses policy-based approach and respects each policy's maximum frequency.
      */
-    override fun setMaxCpuValue(value: Long): Boolean {
+    override fun setMaxCpuValue(value: Long): Boolean = batchLock.withLock {
+        runInSingleOperationTransaction { stageCpuFreq(isMin = false, value = value) }
+    }
+
+    /**
+     * Shared implementation for the min/max CPU frequency setters.
+     * Uses policy-based writes to reduce IPC calls by 50-75% and caps each
+     * policy at its own maximum frequency. In batch mode the value is staged
+     * and only committed to the cached state when commit() succeeds.
+     */
+    private fun stageCpuFreq(isMin: Boolean, value: Long): Boolean {
+        val kind = if (isMin) "min" else "max"
         return try {
+            if (!ensureRestorableBaseline()) return false
+
             // Use policy-based approach if policies are discovered
             if (cpuPolicies.isNotEmpty()) {
-                if (isBatchMode) {
-                    for (policy in cpuPolicies) {
-                        // Cap at policy's max frequency
-                        val cappedValue = if (policy.maxFrequency > 0) {
-                            minOf(value, policy.maxFrequency)
-                        } else {
-                            value
-                        }
-                        batchFilePaths.add(policy.maxFreqPath)
-                        batchCommands.add("echo '$cappedValue' > '${policy.maxFreqPath}'")
-                        modifiedSysfsFiles.add(policy.maxFreqPath)
-                    }
-                    currentMaxCpuFreq = value
-                    return true
-                }
-
-                var success = true
                 for (policy in cpuPolicies) {
-                    // Cap at policy's max frequency
-                    val cappedValue = if (policy.maxFrequency > 0) {
-                        minOf(value, policy.maxFrequency)
-                    } else {
-                        value
-                    }
-
-                    if (!writeSysfsFile(policy.maxFreqPath, cappedValue.toString())) {
-                        success = false
-                        Timber.tag(TAG).e("Failed to set max freq for policy ${policy.policyId}")
-                    } else {
-                        if (cappedValue != value) {
-                            Timber.tag(TAG).d(
-                                "Set max freq to $cappedValue (capped from $value) for policy ${policy.policyId} " +
-                                "(CPUs: ${policy.cpuCores.joinToString()}, max: ${policy.maxFrequency})"
-                            )
-                        } else {
-                            Timber.tag(TAG).d(
-                                "Set max freq to $value for policy ${policy.policyId} " +
-                                "(CPUs: ${policy.cpuCores.joinToString()})"
-                            )
-                        }
-                    }
+                    val cappedValue = if (policy.maxFrequency > 0) minOf(value, policy.maxFrequency) else value
+                    if (!captureBatchSnapshot(policy.minFreqPath)) return false
+                    if (!captureBatchSnapshot(policy.maxFreqPath)) return false
+                    batchFilePaths.add(policy.minFreqPath)
+                    batchFilePaths.add(policy.maxFreqPath)
+                    val path = if (isMin) policy.minFreqPath else policy.maxFreqPath
+                    batchCommands.add("echo '$cappedValue' > '$path'")
                 }
-                if (success) {
-                    currentMaxCpuFreq = value
-                }
-                return success
+                if (isMin) batchPendingMin = value else batchPendingMax = value
+                return true
             }
 
             // Fallback: per-CPU approach (legacy behavior)
             val numCpus = getNumCpus()
 
-            if (isBatchMode) {
-                for (cpu in 0 until numCpus) {
-                    val path = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_max_freq"
-                    batchFilePaths.add(path)
-                    batchCommands.add("echo '$value' > '$path'")
-                    modifiedSysfsFiles.add(path)
-                }
-                return true
-            }
-
-            var success = true
             for (cpu in 0 until numCpus) {
-                val path = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_max_freq"
-                if (!writeSysfsFile(path, value.toString())) {
-                    success = false
-                    Timber.tag(TAG).e("Failed to set max frequency for CPU $cpu")
-                }
+                val minPath = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_min_freq"
+                val maxPath = "$CPU_BASE_PATH/cpu$cpu/cpufreq/scaling_max_freq"
+                if (!captureBatchSnapshot(minPath)) return false
+                if (!captureBatchSnapshot(maxPath)) return false
+                batchFilePaths.add(minPath)
+                batchFilePaths.add(maxPath)
+                val path = if (isMin) minPath else maxPath
+                batchCommands.add("echo '$value' > '$path'")
             }
-
-            success
+            if (isMin) batchPendingMin = value else batchPendingMax = value
+            true
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Failed to set max frequency")
+            Timber.tag(TAG).e(e, "Failed to set $kind frequency")
             false
         }
     }
@@ -768,18 +734,32 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * Accepts UI-friendly value where higher = better performance
      * (Internally converts to Adreno's reversed sysfs semantics)
      */
-    override fun setMinGpuPowerLevel(level: Int): Boolean {
+    override fun setMinGpuPowerLevel(level: Int): Boolean = batchLock.withLock {
+        runInSingleOperationTransaction { stageMinGpuPowerLevel(level) }
+    }
+
+    private fun stageMinGpuPowerLevel(level: Int): Boolean {
         if (!isGpuSupported()) {
             Timber.tag(TAG).w("GPU control not supported")
             return false
         }
+        if (!ensureRestorableBaseline()) return false
 
         val numLevels = getNumGpuPowerLevels()
         // Convert: UI level (high = high perf) to sysfs min_pwrlevel (high index = low perf)
         val sysfsLevel = if (numLevels > 0) numLevels - 1 - level else level
 
-        val minPath = "$GPU_BASE_PATH/min_pwrlevel"
-        return writeGpuPowerLevel(minPath, sysfsLevel)
+        val currentMaxSysfs = batchPendingGpuMax
+            ?: currentMaxGpuSysfsLevel
+            ?: readSysfsFile("$GPU_BASE_PATH/max_pwrlevel")?.toIntOrNull()
+            ?: 0
+        if (sysfsLevel < currentMaxSysfs) {
+            if (!stageGpuPowerLevel("$GPU_BASE_PATH/max_pwrlevel", sysfsLevel)) return false
+            batchPendingGpuMax = sysfsLevel
+        }
+        if (!stageGpuPowerLevel("$GPU_BASE_PATH/min_pwrlevel", sysfsLevel)) return false
+        batchPendingGpuMin = sysfsLevel
+        return true
     }
 
     /**
@@ -787,18 +767,32 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * Accepts UI-friendly value where higher = better performance
      * (Internally converts to Adreno's reversed sysfs semantics)
      */
-    override fun setMaxGpuPowerLevel(level: Int): Boolean {
+    override fun setMaxGpuPowerLevel(level: Int): Boolean = batchLock.withLock {
+        runInSingleOperationTransaction { stageMaxGpuPowerLevel(level) }
+    }
+
+    private fun stageMaxGpuPowerLevel(level: Int): Boolean {
         if (!isGpuSupported()) {
             Timber.tag(TAG).w("GPU control not supported")
             return false
         }
+        if (!ensureRestorableBaseline()) return false
 
         val numLevels = getNumGpuPowerLevels()
         // Convert: UI level (high = high perf) to sysfs max_pwrlevel (low index = high perf)
         val sysfsLevel = if (numLevels > 0) numLevels - 1 - level else level
 
-        val maxPath = "$GPU_BASE_PATH/max_pwrlevel"
-        return writeGpuPowerLevel(maxPath, sysfsLevel)
+        val currentMinSysfs = batchPendingGpuMin
+            ?: currentMinGpuSysfsLevel
+            ?: readSysfsFile("$GPU_BASE_PATH/min_pwrlevel")?.toIntOrNull()
+            ?: (if (numLevels > 0) numLevels - 1 else 0)
+        if (sysfsLevel > currentMinSysfs) {
+            if (!stageGpuPowerLevel("$GPU_BASE_PATH/min_pwrlevel", sysfsLevel)) return false
+            batchPendingGpuMin = sysfsLevel
+        }
+        if (!stageGpuPowerLevel("$GPU_BASE_PATH/max_pwrlevel", sysfsLevel)) return false
+        batchPendingGpuMax = sysfsLevel
+        return true
     }
 
     override fun getDefaultProfile(): PowerProfile {
@@ -852,29 +846,40 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * @param level Power level value in sysfs semantics (0 = fastest for Adreno)
      */
     private fun writeGpuPowerLevel(path: String, level: Int): Boolean {
-        if (!isPServerAvailable) {
+        if (connectToPServer() == null) {
             Timber.tag(TAG).w("PServer not available to write GPU power level")
             return false
         }
 
         return try {
-            // Concatenate chmod -> echo -> chmod into a single command
-            val command = "chmod 644 '$path'; echo $level > $path; chmod 444 '$path'"
-            val result = executeAsRoot(command)
+            if (!ensureRestorableBaseline()) return false
+            if (captureSysfsMode(path) == null) return false
+            val command = "chmod 644 '$path' && echo $level > '$path'"
+            val result = executeCheckedAsRoot(command)
 
             if (result.isFailure) {
                 Timber.tag(TAG).e("Failed to write GPU power level to $path: ${result.exceptionOrNull()?.message}")
                 return false
             }
 
-            // Track modified file for restoration
-            modifiedSysfsFiles.add(path)
-
-            result.isSuccess
+            if (result.isSuccess) {
+                if (path.endsWith("min_pwrlevel")) currentMinGpuSysfsLevel = level
+                if (path.endsWith("max_pwrlevel")) currentMaxGpuSysfsLevel = level
+                true
+            } else {
+                false
+            }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to write GPU power level to $path")
             false
         }
+    }
+
+    private fun stageGpuPowerLevel(path: String, level: Int): Boolean {
+        if (!captureBatchSnapshot(path)) return false
+        batchFilePaths.add(path)
+        batchCommands.add("echo '$level' > '$path'")
+        return true
     }
 
     // ========================================
@@ -1108,13 +1113,15 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      * @return true if successful
      */
     fun setCpuAffinity(pid: Int, cpuMask: String): Boolean {
-        if (!isPServerAvailable) {
+        if (connectToPServer() == null) {
             Timber.tag(TAG).w("PServer not available for CPU affinity")
             return false
         }
 
         return try {
-            val command = "taskset -p $cpuMask $pid"
+            // taskset -p only re-pins the main thread; iterate all TIDs so threads the
+            // process already spawned (render/worker threads) are pinned too.
+            val command = "for t in /proc/$pid/task/*; do taskset -p '$cpuMask' \"\${t##*/}\" 2>/dev/null; done"
             val result = executeAsRoot(command)
 
             if (result.isSuccess) {
@@ -1206,7 +1213,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
      */
     fun getProcessId(packageName: String): Int? {
         return try {
-            val result = executeAsRoot("pidof $packageName")
+            val result = executeAsRoot("pidof '$packageName'")
             result.getOrNull()?.trim()?.toIntOrNull()
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to get PID for $packageName")
@@ -1285,23 +1292,34 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     private fun getNumCpus(): Int {
         return try {
             val content = readSysfsFile("$CPU_BASE_PATH/present")
-            if (content != null) {
-                val parts = content.split("-")
-                if (parts.size == 2) {
-                    parts[1].toInt() + 1
-                } else {
-                    Runtime.getRuntime().availableProcessors()
-                }
-            } else {
-                Runtime.getRuntime().availableProcessors()
-            }
+            // Format is comma-separated ranges, e.g. "0-7" or "0-3,6-7"
+            val total = content?.trim()?.split(",")?.sumOf { range ->
+                val bounds = range.split("-")
+                if (bounds.size == 2) bounds[1].toInt() - bounds[0].toInt() + 1 else 1
+            } ?: 0
+            if (total > 0) total else Runtime.getRuntime().availableProcessors()
         } catch (e: Exception) {
             Runtime.getRuntime().availableProcessors()
         }
     }
 
     private fun executeAsRoot(cmd: String): Result<String?> {
-        if (binder == null) {
+        val activeBinder = connectToPServer()
+            ?: return Result.failure(IllegalStateException("PServer not available"))
+        return executeWithBinder(activeBinder, cmd).recoverCatching { failure ->
+            if (failure is DeadObjectException) {
+                disconnectBinder(activeBinder)
+                val reconnectedBinder = connectToPServer()
+                    ?: throw failure
+                return@recoverCatching executeWithBinder(reconnectedBinder, cmd).getOrThrow()
+            }
+            throw failure
+        }
+    }
+
+    private fun executeWithBinder(activeBinder: IBinder, cmd: String): Result<String?> {
+        if (!activeBinder.isBinderAlive) {
+            disconnectBinder(activeBinder)
             return Result.failure(IllegalStateException("PServer not available"))
         }
 
@@ -1309,7 +1327,9 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
         val reply = Parcel.obtain()
         return try {
             data.writeStringArray(arrayOf(cmd, "1"))
-            binder.transact(0, data, reply, 0)
+            if (!activeBinder.transact(0, data, reply, 0)) {
+                return Result.failure(IllegalStateException("PServer rejected root command"))
+            }
             Result.success(decodeReply(reply))
         } catch (throwable: Throwable) {
             Timber.tag(TAG).e(throwable, "Failed to execute command via PServer: $cmd")
@@ -1318,6 +1338,70 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
             data.recycle()
             reply.recycle()
         }
+    }
+
+    private fun executeCheckedAsRoot(cmd: String): Result<String?> {
+        val marker = "__GAMENATIVE_EXIT_STATUS:"
+        return executeAsRoot(wrapPServerCommandWithExitStatus(cmd)).fold(
+            onSuccess = { output ->
+                val reply = output ?: return@fold Result.failure(
+                    IllegalStateException("PServer did not report root command status"),
+                )
+                val markerIndex = reply.lastIndexOf(marker)
+                if (markerIndex < 0) {
+                    Result.failure(IllegalStateException("PServer did not report root command status"))
+                } else {
+                    val status = reply.substring(markerIndex + marker.length).trim().toIntOrNull()
+                    if (status == 0) {
+                        Result.success(reply.substring(0, markerIndex).trim())
+                    } else {
+                        Result.failure(IllegalStateException("PServer root command exited with status $status"))
+                    }
+                }
+            },
+            onFailure = { failure -> Result.failure(failure) },
+        )
+    }
+
+    private fun connectToPServer(): IBinder? = synchronized(binderLock) {
+        binder?.takeIf { it.isBinderAlive }?.let {
+            isPServerAvailable = true
+            return it
+        }
+        disconnectBinder(binder)
+        val connectedBinder = try {
+            val serviceManager = Class.forName("android.os.ServiceManager")
+            val getService = serviceManager.getDeclaredMethod("getService", String::class.java)
+            getService.invoke(serviceManager, "PServerBinder") as? IBinder
+        } catch (exception: Exception) {
+            Timber.tag(TAG).w("Root service not available: ${exception.message}")
+            null
+        } ?: return null
+
+        val deathRecipient = IBinder.DeathRecipient {
+            disconnectBinder(connectedBinder)
+            Timber.tag(TAG).w("PServer binder died; reconnecting on the next operation")
+        }
+        try {
+            connectedBinder.linkToDeath(deathRecipient, 0)
+        } catch (exception: Exception) {
+            Timber.tag(TAG).w(exception, "Unable to monitor PServer binder")
+        }
+        binder = connectedBinder
+        binderDeathRecipient = deathRecipient
+        isPServerAvailable = true
+        Timber.tag(TAG).i("PServer service found and available")
+        connectedBinder
+    }
+
+    private fun disconnectBinder(expectedBinder: IBinder?) = synchronized(binderLock) {
+        if (expectedBinder == null || binder !== expectedBinder) return
+        binderDeathRecipient?.let { recipient ->
+            runCatching { expectedBinder.unlinkToDeath(recipient, 0) }
+        }
+        binder = null
+        binderDeathRecipient = null
+        isPServerAvailable = false
     }
 
     private fun decodeReply(reply: Parcel): String? {
@@ -1329,7 +1413,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
 
     private fun readSysfsFile(path: String): String? {
         // Try using PServer cat command first (works with root permissions)
-        if (isPServerAvailable) {
+        if (connectToPServer() != null) {
             return try {
                 val result = executeAsRoot("cat '$path'")
                 if (result.isSuccess) {
@@ -1365,28 +1449,145 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     }
 
     private fun writeSysfsFile(path: String, value: String): Boolean {
-        if (!isPServerAvailable) {
+        if (connectToPServer() == null) {
             Timber.tag(TAG).w("PServer not available to write to $path")
             return false
         }
 
         return try {
-            // Concatenate chmod -> echo -> chmod into a single command
-            val command = "chmod 644 '$path'; echo '$value' > '$path'; chmod 444 '$path'"
-            val result = executeAsRoot(command)
+            if (captureSysfsMode(path) == null) return false
+            val command = "chmod 644 '$path' && echo '$value' > '$path'"
+            val result = executeCheckedAsRoot(command)
 
             if (result.isFailure) {
                 Timber.tag(TAG).e("Failed to write to $path: ${result.exceptionOrNull()?.message}")
                 return false
             }
 
-            // Track modified file for restoration
-            modifiedSysfsFiles.add(path)
-
             result.isSuccess
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to write to $path")
             false
+        }
+    }
+
+    private fun captureBatchSnapshot(path: String): Boolean {
+        if (captureSysfsMode(path) == null) {
+            batchFailed = true
+            return false
+        }
+        if (path !in batchSnapshots) {
+            val originalValue = readSysfsFile(path)
+            if (originalValue == null) {
+                batchFailed = true
+                return false
+            } else {
+                batchSnapshots[path] = originalValue
+                batchFirstMutationPaths.add(path)
+            }
+        }
+        return true
+    }
+
+    private fun captureSysfsMode(path: String): String? {
+        originalSysfsModes[path]?.let { return it }
+        val mode = executeCheckedAsRoot("stat -c %a '$path'").getOrNull()
+            ?.trim()
+            ?.takeIf { it.matches(Regex("[0-7]{3,4}")) }
+            ?: return null
+        originalSysfsModes[path] = mode
+        return mode
+    }
+
+    private fun ensureRestorableBaseline(): Boolean {
+        return baselineState.isValid || captureSessionBaseline()
+    }
+
+    private fun captureSessionBaseline(): Boolean {
+        clearSessionBaseline()
+        val cpuCaptured = captureCpuPolicySnapshot()
+        val gpuRequired = isGpuSupported()
+        val gpuCaptured = cpuCaptured && (!gpuRequired || snapshotGpuState())
+        baselineState = PServerSessionBaselineState(cpuCaptured, gpuRequired, gpuCaptured)
+        if (!baselineState.isValid) {
+            clearSessionBaseline()
+            return false
+        }
+        return true
+    }
+
+    private fun clearSessionBaseline() {
+        baselineState = PServerSessionBaselineState.INVALID
+        originalPolicyStates.clear()
+        originalGpuState = null
+        originalSysfsModes.clear()
+        currentMinGpuSysfsLevel = null
+        currentMaxGpuSysfsLevel = null
+    }
+
+    private fun captureCpuPolicySnapshot(): Boolean {
+        if (hasCompleteCpuPolicySnapshot()) return true
+        if (cpuPolicies.isEmpty()) return false
+
+        val snapshots = mutableMapOf<String, PolicySnapshot>()
+        for (policy in cpuPolicies) {
+            val policyDir = policy.governorPath.substringBeforeLast("/")
+            val governor = readSysfsFile("$policyDir/scaling_governor")?.trim()?.takeIf(String::isNotEmpty)
+                ?: return false
+            val minFrequency = readSysfsFile("$policyDir/scaling_min_freq")?.toLongOrNull()
+                ?: return false
+            val maxFrequency = readSysfsFile("$policyDir/scaling_max_freq")?.toLongOrNull()
+                ?: return false
+            if (minFrequency <= 0 || maxFrequency <= 0 || minFrequency > maxFrequency) return false
+            snapshots[policy.governorPath] = PolicySnapshot(governor, minFrequency, maxFrequency)
+        }
+        originalPolicyStates.clear()
+        originalPolicyStates.putAll(snapshots)
+        return true
+    }
+
+    private fun hasCompleteCpuPolicySnapshot(): Boolean {
+        return baselineState.isValid && cpuPolicies.isNotEmpty() &&
+            originalPolicyStates.size == cpuPolicies.size &&
+            cpuPolicies.all { it.governorPath in originalPolicyStates }
+    }
+
+    private fun snapshotGpuState(): Boolean {
+        if (!isGpuSupported()) return true
+        if (originalGpuState != null) return true
+        val minPowerLevel = readSysfsFile("$GPU_BASE_PATH/min_pwrlevel")?.toIntOrNull() ?: return false
+        val maxPowerLevel = readSysfsFile("$GPU_BASE_PATH/max_pwrlevel")?.toIntOrNull() ?: return false
+        if (minPowerLevel < 0 || maxPowerLevel < 0 || minPowerLevel < maxPowerLevel) return false
+        originalGpuState = GpuSnapshot(minPowerLevel, maxPowerLevel)
+        currentMinGpuSysfsLevel = minPowerLevel
+        currentMaxGpuSysfsLevel = maxPowerLevel
+        return true
+    }
+
+    private fun restoreGpuState(): Boolean {
+        if (!isGpuSupported()) return true
+        val snapshot = originalGpuState ?: return false
+        val currentMin = readSysfsFile("$GPU_BASE_PATH/min_pwrlevel")?.toIntOrNull() ?: return false
+        val currentMax = readSysfsFile("$GPU_BASE_PATH/max_pwrlevel")?.toIntOrNull() ?: return false
+        return orderedPServerBoundWrites(
+            currentMin = currentMin.toLong(),
+            currentMax = currentMax.toLong(),
+            targetMin = snapshot.minPowerLevel.toLong(),
+            targetMax = snapshot.maxPowerLevel.toLong(),
+            minMustNotExceedMax = false,
+        ).all { bound ->
+            if (bound == PServerBound.MIN) {
+                writeGpuPowerLevel("$GPU_BASE_PATH/min_pwrlevel", snapshot.minPowerLevel)
+            } else {
+                writeGpuPowerLevel("$GPU_BASE_PATH/max_pwrlevel", snapshot.maxPowerLevel)
+            }
+        }
+    }
+
+    private fun restoreSysfsModes(): Boolean {
+        if (originalSysfsModes.isEmpty()) return true
+        return originalSysfsModes.all { (path, mode) ->
+            executeCheckedAsRoot("chmod $mode '$path'").isSuccess
         }
     }
 }

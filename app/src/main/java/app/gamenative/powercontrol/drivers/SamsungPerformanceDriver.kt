@@ -42,6 +42,18 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
     private var currentGpuMaxLevel: Int = GPU_LEVEL_MAX
     private var currentBusMinLevel: Int = BUS_LEVEL_MIN
     private var currentBusMaxLevel: Int = BUS_LEVEL_MAX
+    private val updateLock = Any()
+    private var isBatchUpdate = false
+    private var pendingState: PerformanceState? = null
+
+    private data class PerformanceState(
+        val cpuMin: Int,
+        val cpuMax: Int,
+        val gpuMin: Int,
+        val gpuMax: Int,
+        val busMin: Int,
+        val busMax: Int
+    )
 
     init {
         performanceManager = try {
@@ -76,12 +88,12 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
     override fun start() {
         // No-op for Samsung driver
         // Performance controls are started individually by setMinCpuValue, setMaxCpuValue, etc.
-        // Each setter calls performanceManager.start(params) with specific CustomParams
         if (!isDriverSupported()) return
         Timber.tag(TAG).d("Samsung Performance Driver ready (controls started by individual setters)")
     }
 
     override fun stop() {
+        cancelUpdate()
         if (!isDriverSupported()) return
 
         try {
@@ -104,17 +116,99 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
         return (CPU_LEVEL_MIN..CPU_LEVEL_MAX).map { it.toLong() }
     }
 
+    private fun applyState(state: PerformanceState): Boolean {
+        val manager = performanceManager ?: return false
+        val params = CustomParams()
+        params.add(CustomParams.TYPE_CPU_MIN, state.cpuMin, DEFAULT_TIMEOUT_MS)
+        params.add(CustomParams.TYPE_CPU_MAX, state.cpuMax, DEFAULT_TIMEOUT_MS)
+        params.add(CustomParams.TYPE_GPU_MIN, state.gpuMin, DEFAULT_TIMEOUT_MS)
+        params.add(CustomParams.TYPE_GPU_MAX, state.gpuMax, DEFAULT_TIMEOUT_MS)
+        params.add(CustomParams.TYPE_BUS_MIN, state.busMin, DEFAULT_TIMEOUT_MS)
+        params.add(CustomParams.TYPE_BUS_MAX, state.busMax, DEFAULT_TIMEOUT_MS)
+
+        manager.start(params)
+        currentCpuMinLevel = state.cpuMin
+        currentCpuMaxLevel = state.cpuMax
+        currentGpuMinLevel = state.gpuMin
+        currentGpuMaxLevel = state.gpuMax
+        currentBusMinLevel = state.busMin
+        currentBusMaxLevel = state.busMax
+        return true
+    }
+
+    override fun beginUpdate() = synchronized(updateLock) {
+        check(!isBatchUpdate) { "A Samsung update is already in progress" }
+        pendingState = currentState()
+        isBatchUpdate = true
+    }
+
+    override fun commit(): Boolean = synchronized(updateLock) {
+        if (!isBatchUpdate) return true
+
+        val state = pendingState
+        clearPendingUpdate()
+        if (state == null) return false
+
+        return try {
+            applyState(state)
+        } catch (exception: Exception) {
+            Timber.tag(TAG).e(exception, "Failed to commit Samsung performance update")
+            false
+        }
+    }
+
+    override fun cancelUpdate() = synchronized(updateLock) {
+        clearPendingUpdate()
+    }
+
+    private fun currentState() = PerformanceState(
+        cpuMin = currentCpuMinLevel,
+        cpuMax = currentCpuMaxLevel,
+        gpuMin = currentGpuMinLevel,
+        gpuMax = currentGpuMaxLevel,
+        busMin = currentBusMinLevel,
+        busMax = currentBusMaxLevel,
+    )
+
+    private fun clearPendingUpdate() {
+        pendingState = null
+        isBatchUpdate = false
+    }
+
+    private fun updateState(transform: (PerformanceState) -> PerformanceState): Boolean = synchronized(updateLock) {
+        val state = normalizeState(transform(pendingState ?: currentState()))
+        if (isBatchUpdate) {
+            pendingState = state
+            true
+        } else {
+            applyState(state)
+        }
+    }
+
+    private fun normalizeState(state: PerformanceState): PerformanceState {
+        val cpuBounds = PerformanceBounds(state.cpuMin, state.cpuMax)
+        val gpuBounds = PerformanceBounds(state.gpuMin, state.gpuMax)
+        val busBounds = PerformanceBounds(state.busMin, state.busMax)
+        return state.copy(
+            cpuMin = minOf(cpuBounds.minimum, cpuBounds.maximum),
+            cpuMax = maxOf(cpuBounds.minimum, cpuBounds.maximum),
+            gpuMin = minOf(gpuBounds.minimum, gpuBounds.maximum),
+            gpuMax = maxOf(gpuBounds.minimum, gpuBounds.maximum),
+            busMin = minOf(busBounds.minimum, busBounds.maximum),
+            busMax = maxOf(busBounds.minimum, busBounds.maximum),
+        )
+    }
+
     override fun setMinCpuValue(value: Long): Boolean {
         if (!isDriverSupported()) return false
 
         return try {
             val level = value.toInt().coerceIn(CPU_LEVEL_MIN, CPU_LEVEL_MAX)
 
-            val params = CustomParams()
-            params.add(CustomParams.TYPE_CPU_MIN, level, DEFAULT_TIMEOUT_MS)
-
-            performanceManager?.start(params)
-            currentCpuMinLevel = level
+            if (!updateState {
+                val bounds = normalizeMinRequest(it.cpuMin, it.cpuMax, level)
+                it.copy(cpuMin = bounds.minimum, cpuMax = bounds.maximum)
+            }) return false
 
             Timber.tag(TAG).d("Set CPU min level to $level")
             true
@@ -130,11 +224,10 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
         return try {
             val level = value.toInt().coerceIn(CPU_LEVEL_MIN, CPU_LEVEL_MAX)
 
-            val params = CustomParams()
-            params.add(CustomParams.TYPE_CPU_MAX, level, DEFAULT_TIMEOUT_MS)
-
-            performanceManager?.start(params)
-            currentCpuMaxLevel = level
+            if (!updateState {
+                val bounds = normalizeMaxRequest(it.cpuMin, it.cpuMax, level)
+                it.copy(cpuMin = bounds.minimum, cpuMax = bounds.maximum)
+            }) return false
 
             Timber.tag(TAG).d("Set CPU max level to $level")
             true
@@ -168,11 +261,10 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
         return try {
             val gpuLevel = level.coerceIn(GPU_LEVEL_MIN, GPU_LEVEL_MAX)
 
-            val params = CustomParams()
-            params.add(CustomParams.TYPE_GPU_MIN, gpuLevel, DEFAULT_TIMEOUT_MS)
-
-            performanceManager?.start(params)
-            currentGpuMinLevel = gpuLevel
+            if (!updateState {
+                val bounds = normalizeMinRequest(it.gpuMin, it.gpuMax, gpuLevel)
+                it.copy(gpuMin = bounds.minimum, gpuMax = bounds.maximum)
+            }) return false
 
             Timber.tag(TAG).d("Set GPU min level to $gpuLevel")
             true
@@ -188,11 +280,10 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
         return try {
             val gpuLevel = level.coerceIn(GPU_LEVEL_MIN, GPU_LEVEL_MAX)
 
-            val params = CustomParams()
-            params.add(CustomParams.TYPE_GPU_MAX, gpuLevel, DEFAULT_TIMEOUT_MS)
-
-            performanceManager?.start(params)
-            currentGpuMaxLevel = gpuLevel
+            if (!updateState {
+                val bounds = normalizeMaxRequest(it.gpuMin, it.gpuMax, gpuLevel)
+                it.copy(gpuMin = bounds.minimum, gpuMax = bounds.maximum)
+            }) return false
 
             Timber.tag(TAG).d("Set GPU max level to $gpuLevel")
             true
@@ -220,11 +311,10 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
         return try {
             val busLevel = level.coerceIn(BUS_LEVEL_MIN, BUS_LEVEL_MAX)
 
-            val params = CustomParams()
-            params.add(CustomParams.TYPE_BUS_MIN, busLevel, DEFAULT_TIMEOUT_MS)
-
-            performanceManager?.start(params)
-            currentBusMinLevel = busLevel
+            if (!updateState {
+                val bounds = normalizeMinRequest(it.busMin, it.busMax, busLevel)
+                it.copy(busMin = bounds.minimum, busMax = bounds.maximum)
+            }) return false
 
             Timber.tag(TAG).d("Set RAM bus min level to $busLevel")
             true
@@ -240,11 +330,10 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
         return try {
             val busLevel = level.coerceIn(BUS_LEVEL_MIN, BUS_LEVEL_MAX)
 
-            val params = CustomParams()
-            params.add(CustomParams.TYPE_BUS_MAX, busLevel, DEFAULT_TIMEOUT_MS)
-
-            performanceManager?.start(params)
-            currentBusMaxLevel = busLevel
+            if (!updateState {
+                val bounds = normalizeMaxRequest(it.busMin, it.busMax, busLevel)
+                it.copy(busMin = bounds.minimum, busMax = bounds.maximum)
+            }) return false
 
             Timber.tag(TAG).d("Set RAM bus max level to $busLevel")
             true

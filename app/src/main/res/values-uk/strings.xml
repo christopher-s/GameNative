@@ -2157,12 +2157,8 @@
 
     <!-- Power Control -->
     <string name="power_control">Керування продуктивністю</string>
-    <string name="power_control_info">Керує масштабуванням частоти процесора та налаштуваннями регулятора. Потрібна служба PServer.</string>
-    <string name="power_control_driver">Драйвер: %s</string>
     <string name="power_control_profiles">Профілі продуктивності</string>
     <string name="power_control_governor">Регулятор ЦП</string>
-    <string name="power_control_current_frequencies">Поточні частоти</string>
-    <string name="power_control_frequencies">Налаштування частоти</string>
     <string name="power_control_cpu_min_freq">Мінімальна частота ЦП</string>
     <string name="power_control_cpu_max_freq">Максимальна частота ЦП</string>
     <string name="power_control_gpu_freq">Частота ГП</string>
@@ -2170,7 +2166,6 @@
     <string name="power_control_gpu_max_power">Максимальна потужність ГП</string>
     <string name="power_control_ram_min_power">Мінімальна частота ОЗП</string>
     <string name="power_control_ram_max_power">Максимальна частота ОЗП</string>
-    <string name="power_control_available_frequencies">Доступні частоти</string>
     <string name="power_control_auto_tuning">Автоналаштування</string>
     <string name="power_control_auto_tuning_desc">Автоматичне налаштування продуктивності на основі FPS</string>
     <string name="power_control_tuning_strategy">Стратегія налаштування</string>

@@ -46,11 +46,6 @@ abstract class PerformanceDriver {
     open fun isBusSupported(): Boolean = false
 
     /**
-     * Check if fan control is supported
-     */
-    open fun isFanSupported(): Boolean = false
-
-    /**
      * Get the display unit for frequency values
      */
     abstract fun getDisplayUnit(): DisplayUnit
@@ -67,17 +62,20 @@ abstract class PerformanceDriver {
 
     /**
      * Begin a batch update session.
-     * For PServerDriver, this starts collecting commands to execute in a single call.
-     * For SamsungDriver, this is a no-op as CustomParams already handles batching.
+     * Implementations stage all mutations until [commit] succeeds.
      */
     open fun beginUpdate() {}
 
     /**
-     * Commit all pending updates from the batch session.
-     * For PServerDriver, this executes all collected commands in a single root call.
-     * For SamsungDriver, this is a no-op as each setter already calls start(params).
+     * Commit every mutation staged by [beginUpdate].
      */
     open fun commit(): Boolean = true
+
+    /**
+     * Discard a pending update without applying it. Implementations that may have applied a
+     * partial commit must restore their transaction snapshot before returning.
+     */
+    open fun cancelUpdate() {}
 
     // ========================================
     // CPU Control

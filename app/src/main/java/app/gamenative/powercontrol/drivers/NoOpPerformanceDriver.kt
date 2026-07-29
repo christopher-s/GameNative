@@ -18,4 +18,8 @@ class NoOpPerformanceDriver : PerformanceDriver() {
     override fun isDriverSupported(): Boolean = false
 
     override fun getDisplayUnit(): DisplayUnit = DisplayUnit.INTEGER
+
+    override fun commit(): Boolean = false
+
+    override fun cancelUpdate() = Unit
 }

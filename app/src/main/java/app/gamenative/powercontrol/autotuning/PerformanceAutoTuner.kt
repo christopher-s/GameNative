@@ -3,6 +3,8 @@ package app.gamenative.powercontrol.autotuning
 import app.gamenative.powercontrol.AutoTuningStrategy
 import app.gamenative.powercontrol.PowerManager
 import timber.log.Timber
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.math.abs
 
 /**
@@ -18,15 +20,19 @@ import kotlin.math.abs
  * @param enableLogging Enable verbose logging of tuning operations
  */
 class PerformanceAutoTuner(
-    private val availableCpuFreqs: List<Long>,
+    availableCpuFreqs: List<Long>,
     private val numGpuLevels: Int,
     private val numBusLevels: Int,
-    private val onCpuFrequencyChange: (Long) -> Unit,
-    private val onGpuLevelChange: (Int) -> Unit,
-    private val onBusLevelChange: (Int) -> Unit,
+    private val onCpuFrequencyChange: (Long) -> Boolean,
+    private val onGpuLevelChange: (Int) -> Boolean,
+    private val onBusLevelChange: (Int) -> Boolean,
     private val getTuningStrategy: () -> AutoTuningStrategy,
-    private val enableLogging: Boolean = false
+    private val enableLogging: Boolean = false,
+    private val warmupCycles: Int = WARMUP_CYCLES,
+    private val cycleDelayMillis: Long = 2_000L,
 ) {
+    private val availableCpuFreqs = normalizeCpuFrequencies(availableCpuFreqs)
+
     enum class BottleneckType {
         CPU_BOUND,
         GPU_BOUND,
@@ -81,14 +87,20 @@ class PerformanceAutoTuner(
     private var currentCpuPerformance: Double = 50.0
     private var currentGpuPerformance: Double = 50.0
     private var currentBusPerformance: Double = 50.0
-    private var warmUpCycles = 0
-    private var isRunning: Boolean = false
+    private val warmupCycleCounter = WarmupCycleCounter(warmupCycles)
+    private val lastAppliedCpuFrequency = LastAppliedValue<Long>()
+    private val lastAppliedGpuLevel = LastAppliedValue<Int>()
+    private val lastAppliedBusLevel = LastAppliedValue<Int>()
+    @Volatile private var isRunning: Boolean = false
+    private val cycleLock = ReentrantLock()
+    @Volatile
     private var tuningThread: Thread? = null
     private var currentBottleneck: BottleneckType = BottleneckType.NONE
 
     /**
      * Start the auto-tuning process
      */
+    @Synchronized
     fun start() {
         if (isRunning) {
             Timber.tag(TAG).w("Auto-tuning already running")
@@ -100,98 +112,94 @@ class PerformanceAutoTuner(
             return
         }
 
-        val minCpuFreq = availableCpuFreqs.first().toDouble()
-        val maxCpuFreq = availableCpuFreqs.last().toDouble()
+        cycleLock.withLock {
+            val minCpuFreq = availableCpuFreqs.first().toDouble()
+            val maxCpuFreq = availableCpuFreqs.last().toDouble()
 
-        Timber.tag(TAG).i("Starting auto-tuning (CPU: $minCpuFreq-$maxCpuFreq kHz, GPU levels: $numGpuLevels, Bus levels: $numBusLevels)")
+            Timber.tag(TAG).i("Starting auto-tuning (CPU: $minCpuFreq-$maxCpuFreq kHz, GPU levels: $numGpuLevels, Bus levels: $numBusLevels)")
 
-        // Initialize CPU PID controller for incremental adjustments
-        cpuPidController = PidController(
-            kp = 0.5,
-            ki = 0.2,
-            kd = 0.1,
-            outputMin = -100.0,
-            outputMax = 100.0,
-            integralLimit = 50.0,
-            tag = "CpuPidController",
-            enableLogging = enableLogging
-        )
-
-        // Initialize GPU PID controller
-        if (numGpuLevels > 0) {
-            gpuPidController = PidController(
+            cpuPidController = PidController(
                 kp = 0.5,
                 ki = 0.2,
                 kd = 0.1,
                 outputMin = -100.0,
                 outputMax = 100.0,
                 integralLimit = 50.0,
-                tag = "GpuPidController",
-                enableLogging = enableLogging
+                tag = "CpuPidController",
+                enableLogging = false
             )
-        }
 
-        // Initialize RAM Bus PID controller
-        if (numBusLevels > 0) {
-            busPidController = PidController(
-                kp = 0.5,
-                ki = 0.2,
-                kd = 0.1,
-                outputMin = -100.0,
-                outputMax = 100.0,
-                integralLimit = 50.0,
-                tag = "BusPidController",
-                enableLogging = enableLogging
-            )
-        }
-
-        // Reset performance baselines
-        currentCpuPerformance = 50.0
-        currentGpuPerformance = 50.0
-        currentBusPerformance = 50.0
-
-        isRunning = true
-
-        // Start tuning thread
-        tuningThread = Thread {
-            try {
-                while (isRunning && !Thread.currentThread().isInterrupted) {
-                    performTuningCycle()
-                    Thread.sleep(2000)
-                }
-            } catch (e: InterruptedException) {
-                if (enableLogging) {
-                    Timber.tag(TAG).i("Auto-tuning thread interrupted")
-                }
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Auto-tuning error")
-            } finally {
-                Timber.tag(TAG).i("Auto-tuning stopped")
+            if (numGpuLevels > 0) {
+                gpuPidController = PidController(
+                    kp = 0.5,
+                    ki = 0.2,
+                    kd = 0.1,
+                    outputMin = -100.0,
+                    outputMax = 100.0,
+                    integralLimit = 50.0,
+                    tag = "GpuPidController",
+                    enableLogging = false
+                )
             }
-        }.apply {
-            name = "PerformanceAutoTuner"
-            priority = Thread.NORM_PRIORITY
-            start()
+
+            if (numBusLevels > 0) {
+                busPidController = PidController(
+                    kp = 0.5,
+                    ki = 0.2,
+                    kd = 0.1,
+                    outputMin = -100.0,
+                    outputMax = 100.0,
+                    integralLimit = 50.0,
+                    tag = "BusPidController",
+                    enableLogging = false
+                )
+            }
+
+            resetSessionState()
+            isRunning = true
+
+            val worker = Thread {
+                try {
+                    while (canRunCycle()) {
+                        cycleLock.withLock {
+                            if (canRunCycle()) performTuningCycle()
+                        }
+                        Thread.sleep(cycleDelayMillis)
+                    }
+                } catch (e: InterruptedException) {
+                    if (enableLogging) {
+                        Timber.tag(TAG).i("Auto-tuning thread interrupted")
+                    }
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Auto-tuning error")
+                } finally {
+                    isRunning = false
+                    if (tuningThread === Thread.currentThread()) {
+                        tuningThread = null
+                        resetControllers()
+                    }
+                    Timber.tag(TAG).i("Auto-tuning stopped")
+                }
+            }
+            worker.name = "PerformanceAutoTuner"
+            worker.priority = Thread.NORM_PRIORITY
+            tuningThread = worker
+            worker.start()
         }
     }
 
     /**
      * Stop the auto-tuning process
      */
+    @Synchronized
     fun stop() {
-        if (!isRunning) return
-
+        val worker = tuningThread ?: return
         isRunning = false
-        tuningThread?.interrupt()
-        tuningThread?.join(1000)
-        tuningThread = null
-
-        cpuPidController?.reset()
-        gpuPidController?.reset()
-        busPidController?.reset()
-        cpuPidController = null
-        gpuPidController = null
-        busPidController = null
+        worker.interrupt()
+        if (worker !== Thread.currentThread()) {
+            joinUninterruptibly(worker)
+            tuningThread = null
+        }
 
         if (enableLogging) {
             Timber.tag(TAG).i("Auto-tuning stopped and reset")
@@ -202,8 +210,8 @@ class PerformanceAutoTuner(
      * Perform one tuning cycle
      */
     private fun performTuningCycle() {
-        // Skip first ${WARMUP_CYCLES} cycles regardless of FPS to allow game to start
-        if (++warmUpCycles < WARMUP_CYCLES) return
+        if (!canRunCycle()) return
+        if (warmupCycleCounter.shouldSkipCycle()) return
 
         val targetFps = PowerManager.targetFps.toDouble()
         val currentFps = PowerManager.currentFps.toDouble()
@@ -219,12 +227,11 @@ class PerformanceAutoTuner(
 
         currentBottleneck = detectBottleneck(cpuUsage, gpuUsage, fpsError)
 
-        if (enableLogging) {
-            Timber.tag(TAG).i("Auto-tuning cycle (target: $targetFps, current: $currentFps, bottleneck: $currentBottleneck, strategy: ${getTuningStrategy()})")
-        }
-
+        if (!canRunCycle()) return
         tuneCpu(targetFps, currentFps)
+        if (!canRunCycle()) return
         tuneGpu(targetFps, currentFps)
+        if (!canRunCycle()) return
         tuneBus(targetFps, currentFps)
     }
 
@@ -232,6 +239,7 @@ class PerformanceAutoTuner(
      * Tune CPU frequency based on FPS and CPU utilization
      */
     private fun tuneCpu(targetFps: Double, currentFps: Double) {
+        if (!canRunCycle()) return
         cpuPidController?.let { controller ->
             val fpsError = abs(targetFps - currentFps)
             val cpuUsage = PowerManager.currentCpuUsage.toDouble()
@@ -270,15 +278,11 @@ class PerformanceAutoTuner(
             }
 
             // Map percentage to actual CPU frequency
-            val minCpuFreq = availableCpuFreqs.first()
-            val maxCpuFreq = availableCpuFreqs.last()
-            val targetCpuFreq = minCpuFreq + ((maxCpuFreq - minCpuFreq) * currentCpuPerformance / 100.0)
-            val closestFreq = findClosestFrequency(availableCpuFreqs, targetCpuFreq.toLong())
+            val closestFreq = mapCpuPerformanceToFrequency(availableCpuFreqs, currentCpuPerformance)
 
-            // Apply frequency change
-            onCpuFrequencyChange(closestFreq)
-
-            if (enableLogging) {
+            if (!canRunCycle()) return
+            val didApply = lastAppliedCpuFrequency.applyIfChanged(closestFreq, onCpuFrequencyChange)
+            if (enableLogging && didApply) {
                 Timber.tag(TAG).d(
                     "CPU: FPS=%.1f/%.1f, usage=%.1f%%, perf=%.1f%%, freq=%d kHz",
                     currentFps, targetFps, cpuUsage, currentCpuPerformance, closestFreq
@@ -291,6 +295,7 @@ class PerformanceAutoTuner(
      * Tune GPU power level based on FPS and GPU utilization
      */
     private fun tuneGpu(targetFps: Double, currentFps: Double) {
+        if (!canRunCycle()) return
         if (numGpuLevels <= 0) return
 
         gpuPidController?.let { controller ->
@@ -334,10 +339,9 @@ class PerformanceAutoTuner(
             val targetLevel = (currentGpuPerformance * (numGpuLevels - 1) / 100.0).toInt()
             val gpuLevel = targetLevel.coerceIn(0, numGpuLevels - 1)
 
-            // Apply GPU level change
-            onGpuLevelChange(gpuLevel)
-
-            if (enableLogging) {
+            if (!canRunCycle()) return
+            val didApply = lastAppliedGpuLevel.applyIfChanged(gpuLevel, onGpuLevelChange)
+            if (enableLogging && didApply) {
                 Timber.tag(TAG).d(
                     "GPU: FPS=%.1f/%.1f, usage=%.1f%%, perf=%.1f%%, level=%d",
                     currentFps, targetFps, gpuUsage, currentGpuPerformance, gpuLevel
@@ -350,6 +354,7 @@ class PerformanceAutoTuner(
      * Tune RAM bus level based on FPS
      */
     private fun tuneBus(targetFps: Double, currentFps: Double) {
+        if (!canRunCycle()) return
         if (numBusLevels <= 0) return
 
         busPidController?.let { controller ->
@@ -384,24 +389,15 @@ class PerformanceAutoTuner(
             val targetLevel = (currentBusPerformance * (numBusLevels - 1) / 100.0).toInt()
             val busLevel = targetLevel.coerceIn(0, numBusLevels - 1)
 
-            // Apply bus level change
-            onBusLevelChange(busLevel)
-
-            if (enableLogging) {
+            if (!canRunCycle()) return
+            val didApply = lastAppliedBusLevel.applyIfChanged(busLevel, onBusLevelChange)
+            if (enableLogging && didApply) {
                 Timber.tag(TAG).d(
                     "Bus: FPS=%.1f/%.1f, perf=%.1f%%, level=%d",
                     currentFps, targetFps, currentBusPerformance, busLevel
                 )
             }
         }
-    }
-
-    /**
-     * Find the closest available frequency to the target frequency
-     */
-    private fun findClosestFrequency(availableFreqs: List<Long>, targetFreq: Long): Long {
-        if (availableFreqs.isEmpty()) return targetFreq
-        return availableFreqs.minByOrNull { abs(it - targetFreq) } ?: targetFreq
     }
 
     /**
@@ -439,8 +435,82 @@ class PerformanceAutoTuner(
         }
     }
 
+    private fun resetSessionState() {
+        currentCpuPerformance = 50.0
+        currentGpuPerformance = 50.0
+        currentBusPerformance = 50.0
+        currentBottleneck = BottleneckType.NONE
+        warmupCycleCounter.reset()
+        lastAppliedCpuFrequency.reset()
+        lastAppliedGpuLevel.reset()
+        lastAppliedBusLevel.reset()
+    }
+
+    private fun canRunCycle(): Boolean =
+        isRunning && tuningThread === Thread.currentThread() && !Thread.currentThread().isInterrupted
+
+    private fun joinUninterruptibly(worker: Thread) {
+        var interrupted = false
+        while (worker.isAlive) {
+            try {
+                worker.join()
+            } catch (exception: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+    }
+
+    private fun resetControllers() {
+        cpuPidController?.reset()
+        gpuPidController?.reset()
+        busPidController?.reset()
+        cpuPidController = null
+        gpuPidController = null
+        busPidController = null
+        resetSessionState()
+    }
+
     /**
      * Check if auto-tuning is currently running
      */
     fun isRunning(): Boolean = isRunning
+}
+
+internal fun normalizeCpuFrequencies(frequencies: List<Long>): List<Long> = frequencies.distinct().sorted()
+
+internal fun mapCpuPerformanceToFrequency(frequencies: List<Long>, performance: Double): Long {
+    val minFrequency = frequencies.first()
+    val maxFrequency = frequencies.last()
+    val targetFrequency = minFrequency + ((maxFrequency - minFrequency) * performance / 100.0)
+    return frequencies.minByOrNull { abs(it - targetFrequency.toLong()) } ?: targetFrequency.toLong()
+}
+
+internal class WarmupCycleCounter(private val cyclesToSkip: Int) {
+    private var completedCycles = 0
+
+    fun shouldSkipCycle(): Boolean {
+        if (completedCycles >= cyclesToSkip) return false
+        completedCycles += 1
+        return true
+    }
+
+    fun reset() {
+        completedCycles = 0
+    }
+}
+
+internal class LastAppliedValue<T> {
+    private var value: T? = null
+
+    fun applyIfChanged(nextValue: T, apply: (T) -> Boolean): Boolean {
+        if (value == nextValue) return false
+        if (!apply(nextValue)) return false
+        value = nextValue
+        return true
+    }
+
+    fun reset() {
+        value = null
+    }
 }

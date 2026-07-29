@@ -2114,12 +2114,8 @@
 
     <!-- Power Control -->
     <string name="power_control">パフォーマンス制御</string>
-    <string name="power_control_info">CPU周波数スケーリングとガバナー設定を制御します。PServerサービスが必要です。</string>
-    <string name="power_control_driver">ドライバー：%s</string>
     <string name="power_control_profiles">パフォーマンスプロファイル</string>
     <string name="power_control_governor">CPUガバナー</string>
-    <string name="power_control_current_frequencies">現在の周波数</string>
-    <string name="power_control_frequencies">周波数設定</string>
     <string name="power_control_cpu_min_freq">最小CPU周波数</string>
     <string name="power_control_cpu_max_freq">最大CPU周波数</string>
     <string name="power_control_gpu_freq">GPU周波数</string>
@@ -2127,7 +2123,6 @@
     <string name="power_control_gpu_max_power">最大GPUパワー</string>
     <string name="power_control_ram_min_power">最小RAM周波数</string>
     <string name="power_control_ram_max_power">最大RAM周波数</string>
-    <string name="power_control_available_frequencies">利用可能な周波数</string>
     <string name="power_control_auto_tuning">自動調整</string>
     <string name="power_control_auto_tuning_desc">FPSに基づいてパフォーマンスを自動調整</string>
     <string name="power_control_tuning_strategy">調整ストラテジー</string>

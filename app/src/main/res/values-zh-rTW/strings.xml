@@ -2166,12 +2166,8 @@
 
     <!-- Power Control -->
     <string name="power_control">效能控制</string>
-    <string name="power_control_info">控制CPU頻率調節和調速器設定。需要PServer服務。</string>
-    <string name="power_control_driver">驅動程式：%s</string>
     <string name="power_control_profiles">效能設定檔</string>
     <string name="power_control_governor">CPU調速器</string>
-    <string name="power_control_current_frequencies">目前頻率</string>
-    <string name="power_control_frequencies">頻率設定</string>
     <string name="power_control_cpu_min_freq">最低CPU頻率</string>
     <string name="power_control_cpu_max_freq">最高CPU頻率</string>
     <string name="power_control_gpu_freq">GPU頻率</string>
@@ -2179,7 +2175,6 @@
     <string name="power_control_gpu_max_power">最高GPU功率</string>
     <string name="power_control_ram_min_power">最低RAM頻率</string>
     <string name="power_control_ram_max_power">最高RAM頻率</string>
-    <string name="power_control_available_frequencies">可用頻率</string>
     <string name="power_control_auto_tuning">自動調整</string>
     <string name="power_control_auto_tuning_desc">根據幀率自動調整效能</string>
     <string name="power_control_tuning_strategy">調整策略</string>

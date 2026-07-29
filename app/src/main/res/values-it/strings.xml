@@ -2150,12 +2150,8 @@
 
     <!-- Power Control -->
     <string name="power_control">Controllo prestazioni</string>
-    <string name="power_control_info">Controlla il ridimensionamento della frequenza della CPU e le impostazioni del governor. Richiede il servizio PServer.</string>
-    <string name="power_control_driver">Driver: %s</string>
     <string name="power_control_profiles">Profili di prestazioni</string>
     <string name="power_control_governor">Governor CPU</string>
-    <string name="power_control_current_frequencies">Frequenze attuali</string>
-    <string name="power_control_frequencies">Impostazioni frequenza</string>
     <string name="power_control_cpu_min_freq">Frequenza minima CPU</string>
     <string name="power_control_cpu_max_freq">Frequenza massima CPU</string>
     <string name="power_control_gpu_freq">Frequenza GPU</string>
@@ -2163,7 +2159,6 @@
     <string name="power_control_gpu_max_power">Potenza massima GPU</string>
     <string name="power_control_ram_min_power">Frequenza minima RAM</string>
     <string name="power_control_ram_max_power">Frequenza massima RAM</string>
-    <string name="power_control_available_frequencies">Frequenze disponibili</string>
     <string name="power_control_auto_tuning">Regolazione automatica</string>
     <string name="power_control_auto_tuning_desc">Regola automaticamente le prestazioni in base agli FPS</string>
     <string name="power_control_tuning_strategy">Strategia di regolazione</string>

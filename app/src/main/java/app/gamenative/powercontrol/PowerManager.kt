@@ -11,6 +11,8 @@ import app.gamenative.powercontrol.drivers.SamsungPerformanceDriver
 import app.gamenative.powercontrol.profiles.CpuGovernor
 import kotlinx.serialization.json.Json
 import timber.log.Timber
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Manager for CPU and GPU performance control.
@@ -23,8 +25,17 @@ object PowerManager {
         ignoreUnknownKeys = true
     }
 
+    @Volatile
     private var driver: PerformanceDriver? = null
     private var autoTuner: PerformanceAutoTuner? = null
+    private val lifecycleLock = Object()
+    private val powerOperationLock = ReentrantLock()
+    private var hasActiveSession = false
+    private var isSessionStarting = false
+    private var isSessionStopping = false
+    private var isAutoTunerStopping = false
+    private var startingSessionGeneration: Long? = null
+    private val sessionState = PowerSessionState()
 
     /**
      * The currently active power profile.
@@ -61,6 +72,7 @@ object PowerManager {
      * Initialize PowerManager with application context.
      * Should be called once during application startup.
      */
+    @Synchronized
     fun initialize(context: Context) {
         if (driver != null) return
 
@@ -75,21 +87,26 @@ object PowerManager {
                     NoOpPerformanceDriver()
                 }
             }
-            PServerDriver(context.applicationContext).isDriverSupported() -> {
-                Timber.tag("PowerManager").i("Using PServer Driver")
-                PServerDriver(context.applicationContext)
-            }
             else -> {
-                Timber.tag("PowerManager").w("No performance driver available")
-                NoOpPerformanceDriver()
+                val pServerDriver = PServerDriver(context.applicationContext)
+                if (pServerDriver.isDriverSupported()) {
+                    Timber.tag("PowerManager").i("Using PServer Driver")
+                    pServerDriver
+                } else {
+                    Timber.tag("PowerManager").w("No performance driver available")
+                    NoOpPerformanceDriver()
+                }
             }
         }
     }
 
     private fun getDriver(): PerformanceDriver {
-        return driver ?: NoOpPerformanceDriver().also {
-            Timber.tag("PowerManager").w("PowerManager not initialized, using NoOpPerformanceDriver as fallback")
-            driver = it
+        driver?.let { return it }
+        return synchronized(this) {
+            driver ?: NoOpPerformanceDriver().also {
+                Timber.tag("PowerManager").w("PowerManager not initialized, using NoOpPerformanceDriver as fallback")
+                driver = it
+            }
         }
     }
 
@@ -120,21 +137,85 @@ object PowerManager {
      * Start the performance driver and restore saved profile if available
      */
     fun start() {
-        getDriver().start()
-        restoreSavedProfile()
+        val startGeneration: Long
+        synchronized(lifecycleLock) {
+            awaitSessionStopLocked()
+            if (hasActiveSession) return
+            hasActiveSession = true
+            isSessionStarting = true
+            startGeneration = sessionState.start()
+            startingSessionGeneration = startGeneration
+        }
 
-        // Pin PulseAudio to dedicated performance core if PServer is available
-        pinPulseAudioToDedicatedCore()
+        try {
+            powerOperationLock.withLock {
+                getDriver().start()
+                restoreSavedProfile()
+                // Pin PulseAudio to dedicated performance core if PServer is available
+                pinPulseAudioToDedicatedCore()
+            }
+            synchronized(lifecycleLock) { finishSessionStartLocked(startGeneration) }
+        } catch (throwable: Throwable) {
+            val tuner: PerformanceAutoTuner?
+            synchronized(lifecycleLock) {
+                if (startingSessionGeneration != startGeneration) throw throwable
+                sessionState.invalidate()
+                tuner = detachAutoTunerLocked()
+            }
+            try {
+                tuner?.stop()
+                powerOperationLock.withLock {
+                    getDriver().stop()
+                }
+            } catch (cleanupFailure: Throwable) {
+                throwable.addSuppressed(cleanupFailure)
+            } finally {
+                synchronized(lifecycleLock) {
+                    if (startingSessionGeneration == startGeneration) {
+                        hasActiveSession = false
+                        isSessionStopping = false
+                        finishAutoTunerStopLocked()
+                        finishSessionStartLocked(startGeneration)
+                    }
+                }
+            }
+            throw throwable
+        }
     }
 
     /**
      * Stop the performance driver and save current profile
      */
     fun stop() {
-        // Save the current profile if available, otherwise read from driver
-        saveProfile()
-        stopAutoTuning()
-        getDriver().stop()
+        val tuner: PerformanceAutoTuner?
+        val driverToStop: PerformanceDriver?
+        synchronized(lifecycleLock) {
+            awaitSessionStopLocked()
+            awaitSessionStartLocked()
+            awaitAutoTunerStopLocked()
+            isSessionStopping = true
+            sessionState.invalidate()
+            tuner = detachAutoTunerLocked()
+            driverToStop = getDriver().takeIf { hasActiveSession }
+        }
+
+        try {
+            tuner?.stop()
+            powerOperationLock.withLock {
+                val profileToSave = synchronized(lifecycleLock) { currentProfile?.copy() }
+                if (driverToStop != null) {
+                    saveProfile(profileToSave)
+                    driverToStop.stop()
+                }
+            }
+        } finally {
+            synchronized(lifecycleLock) {
+                hasActiveSession = false
+                finishAutoTunerStopLocked()
+                isSessionStopping = false
+                lifecycleLock.notifyAll()
+            }
+        }
     }
 
     /**
@@ -143,11 +224,18 @@ object PowerManager {
      * Works with any driver that supports CPU frequency and GPU power level control.
      */
     fun startAutoTuning() {
-        val driver = getDriver()
-
-        if (autoTuner?.isRunning() == true) {
-            Timber.tag("PowerManager").w("Auto-tuning already running")
-            return
+        val driver: PerformanceDriver
+        val tunerToken: PowerTunerToken
+        synchronized(lifecycleLock) {
+            awaitSessionStopLocked()
+            awaitAutoTunerStopLocked()
+            if (!hasActiveSession) return
+            if (autoTuner?.isRunning() == true) {
+                Timber.tag("PowerManager").w("Auto-tuning already running")
+                return
+            }
+            driver = getDriver()
+            tunerToken = sessionState.newTunerToken() ?: return
         }
 
         // Check if driver supports required features
@@ -160,33 +248,66 @@ object PowerManager {
         val numGpuLevels = if (driver.isGpuSupported()) driver.getNumGpuPowerLevels() else 0
         val numBusLevels = if (driver.isBusSupported()) driver.getNumBusLevels() else 0
 
-        autoTuner = PerformanceAutoTuner(
+        val tuner = PerformanceAutoTuner(
             availableCpuFreqs = availableCpuFreqs,
             numGpuLevels = numGpuLevels,
             numBusLevels = numBusLevels,
             onCpuFrequencyChange = { freq ->
-                update {
-                    setMinCpuValue(freq)
-                    setMaxCpuValue(freq)
+                applyTunerUpdate(tunerToken) {
+                    val cpuInfo = getCpuInfo()
+                    val currentMinCpuFreq = cpuInfo?.currentMinValue ?: currentProfile?.minCpuFreq ?: freq
+                    val currentMaxCpuFreq = cpuInfo?.currentMaxValue ?: currentProfile?.maxCpuFreq ?: freq
+                    when {
+                        freq > currentMaxCpuFreq -> {
+                            maxCpuValue(freq)
+                            minCpuValue(freq)
+                        }
+                        freq < currentMinCpuFreq -> {
+                            minCpuValue(freq)
+                            maxCpuValue(freq)
+                        }
+                        else -> {
+                            minCpuValue(freq)
+                            maxCpuValue(freq)
+                        }
+                    }
                 }
             },
             onGpuLevelChange = { level ->
-                update {
-                    setMinGpuPowerLevel(level)
-                    setMaxGpuPowerLevel(level)
+                applyTunerUpdate(tunerToken) {
+                    minGpuPowerLevel(level)
+                    maxGpuPowerLevel(level)
                 }
             },
             onBusLevelChange = { level ->
-                update {
-                    setMinBusLevel(level)
-                    setMaxBusLevel(level)
+                applyTunerUpdate(tunerToken) {
+                    minBusLevel(level)
+                    maxBusLevel(level)
                 }
             },
-            getTuningStrategy = { currentProfile?.tuningStrategy ?: AutoTuningStrategy.BALANCED },
+            getTuningStrategy = {
+                synchronized(lifecycleLock) {
+                    if (sessionState.isActive(tunerToken)) {
+                        currentProfile?.tuningStrategy ?: AutoTuningStrategy.BALANCED
+                    } else {
+                        AutoTuningStrategy.BALANCED
+                    }
+                }
+            },
             enableLogging = BuildConfig.DEBUG
         )
 
-        autoTuner?.start()
+        synchronized(lifecycleLock) {
+            if (
+                isSessionStopping ||
+                isAutoTunerStopping ||
+                !sessionState.isActive(tunerToken) ||
+                currentProfile?.enableAutoTuning != true ||
+                autoTuner?.isRunning() == true
+            ) return
+            autoTuner = tuner
+            tuner.start()
+        }
         Timber.tag("PowerManager").i("Auto-tuning started (CPU freqs: ${availableCpuFreqs.size}, GPU levels: $numGpuLevels, Bus levels: $numBusLevels)")
     }
 
@@ -194,15 +315,19 @@ object PowerManager {
      * Stop automatic performance tuning.
      */
     fun stopAutoTuning() {
-        autoTuner?.let {
-            if (!it.isRunning()) {
-                Timber.tag("PowerManager").w("Auto-tuning not running")
-                return
+        val tuner: PerformanceAutoTuner?
+        synchronized(lifecycleLock) {
+            awaitAutoTunerStopLocked()
+            sessionState.invalidateTunerRequests()
+            tuner = detachAutoTunerLocked()
+        }
+        try {
+            tuner?.stop()
+        } finally {
+            synchronized(lifecycleLock) {
+                finishAutoTunerStopLocked()
+                lifecycleLock.notifyAll()
             }
-            it.stop()
-            autoTuner = null
-        } ?: run {
-            Timber.tag("PowerManager").w("Auto-tuning not initialized")
         }
     }
 
@@ -211,20 +336,144 @@ object PowerManager {
      * Should be called when the UI changes the active profile.
      */
     fun setCurrentProfile(profile: PowerProfile) {
-        currentProfile = profile
+        val tuner: PerformanceAutoTuner?
+        synchronized(lifecycleLock) {
+            if (isSessionStopping) return
+            sessionState.invalidateTunerRequests()
+            tuner = detachAutoTunerLocked()
+        }
 
-        // Handle auto-tuning based on profile setting
-        if (profile.enableAutoTuning) {
-            startAutoTuning()
-        } else {
-            stopAutoTuning()
+        try {
+            tuner?.stop()
+        } finally {
+            synchronized(lifecycleLock) {
+                finishAutoTunerStopLocked()
+                lifecycleLock.notifyAll()
+            }
+        }
+
+        val enableAutoTuning = powerOperationLock.withLock {
+            synchronized(lifecycleLock) {
+                if (isSessionStopping) return@withLock null
+                currentProfile = profile.copy()
+                profile.enableAutoTuning
+            }
+        }
+        if (enableAutoTuning == true) startAutoTuning()
+    }
+
+    fun applyProfile(profile: PowerProfile): Boolean {
+        var enableAutoTuning = false
+        val applied = powerOperationLock.withLock {
+            synchronized(lifecycleLock) {
+                if (isSessionStopping) return@withLock false
+            }
+            val success = updateInternal {
+                name(profile.name)
+                governor(profile.governor.governorName)
+                minCpuValue(profile.minCpuFreq)
+                maxCpuValue(profile.maxCpuFreq)
+                if (isGpuSupported()) {
+                    minGpuPowerLevel(profile.minGpuPowerLevel)
+                    maxGpuPowerLevel(profile.maxGpuPowerLevel)
+                }
+                if (isBusSupported()) {
+                    minBusLevel(profile.minBusLevel)
+                    maxBusLevel(profile.maxBusLevel)
+                }
+            }
+            if (success) {
+                synchronized(lifecycleLock) {
+                    currentProfile = profile.copy()
+                    sessionState.invalidateTunerRequests()
+                    enableAutoTuning = profile.enableAutoTuning
+                }
+            } else {
+                enableAutoTuning = false
+            }
+            success
+        }
+
+        if (applied) {
+            if (enableAutoTuning) startAutoTuning() else stopAutoTuning()
+        }
+        return applied
+    }
+
+    private fun detachAutoTunerLocked(): PerformanceAutoTuner? {
+        isAutoTunerStopping = true
+        return autoTuner.also { autoTuner = null }
+    }
+
+    private fun applyTunerUpdate(
+        tunerToken: PowerTunerToken,
+        block: UpdateBuilder.() -> Unit,
+    ): Boolean {
+        synchronized(lifecycleLock) {
+            if (isSessionStopping || !sessionState.isActive(tunerToken)) return false
+        }
+        return powerOperationLock.withLock {
+            synchronized(lifecycleLock) {
+                if (isSessionStopping || !sessionState.isActive(tunerToken)) return@withLock false
+            }
+            updateInternal(block)
         }
     }
 
+    private fun runProfileOperation(
+        defaultValue: Boolean,
+        operation: () -> Boolean,
+    ): Boolean {
+        synchronized(lifecycleLock) {
+            if (isSessionStopping) return defaultValue
+        }
+        return powerOperationLock.withLock {
+            synchronized(lifecycleLock) {
+                if (isSessionStopping) return@withLock defaultValue
+            }
+            operation()
+        }
+    }
+
+    private fun finishAutoTunerStopLocked() {
+        isAutoTunerStopping = false
+    }
+
+    private fun finishSessionStartLocked(startGeneration: Long) {
+        if (startingSessionGeneration != startGeneration) return
+        startingSessionGeneration = null
+        isSessionStarting = false
+        lifecycleLock.notifyAll()
+    }
+
+    private fun awaitSessionStopLocked() {
+        waitForLifecycleStateLocked { isSessionStopping }
+    }
+
+    private fun awaitSessionStartLocked() {
+        waitForLifecycleStateLocked { isSessionStarting }
+    }
+
+    private fun awaitAutoTunerStopLocked() {
+        waitForLifecycleStateLocked { isAutoTunerStopping }
+    }
+
+    private fun waitForLifecycleStateLocked(isStopping: () -> Boolean) {
+        var interrupted = false
+        while (isStopping()) {
+            try {
+                lifecycleLock.wait()
+            } catch (exception: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
+    }
+
     /**
-     * Check if PServer driver is available
+     * Check if the selected performance driver is available.
      */
-    fun isPServerAvailable(): Boolean {
+    fun isDriverAvailable(): Boolean {
         return getDriver().isDriverSupported()
     }
 
@@ -253,6 +502,10 @@ object PowerManager {
         return getDriver().commit()
     }
 
+    fun cancelUpdate() {
+        getDriver().cancelUpdate()
+    }
+
     /**
      * Builder for batch updates. Provides a fluent API for setting multiple values.
      * Usage:
@@ -265,46 +518,52 @@ object PowerManager {
      * ```
      */
     class UpdateBuilder {
+        private var settersSucceeded = true
+
         fun name(name: String): UpdateBuilder {
             setProfileName(name)
             return this
         }
         fun governor(governor: String): UpdateBuilder {
-            setGovernor(governor)
+            settersSucceeded = setGovernor(governor) && settersSucceeded
             return this
         }
 
         fun minCpuValue(value: Long): UpdateBuilder {
-            setMinCpuValue(value)
+            settersSucceeded = setMinCpuValue(value) && settersSucceeded
             return this
         }
 
         fun maxCpuValue(value: Long): UpdateBuilder {
-            setMaxCpuValue(value)
+            settersSucceeded = setMaxCpuValue(value) && settersSucceeded
             return this
         }
 
         fun minGpuPowerLevel(level: Int): UpdateBuilder {
-            setMinGpuPowerLevel(level)
+            settersSucceeded = setMinGpuPowerLevel(level) && settersSucceeded
             return this
         }
 
         fun maxGpuPowerLevel(level: Int): UpdateBuilder {
-            setMaxGpuPowerLevel(level)
+            settersSucceeded = setMaxGpuPowerLevel(level) && settersSucceeded
             return this
         }
 
         fun minBusLevel(level: Int): UpdateBuilder {
-            setMinBusLevel(level)
+            settersSucceeded = setMinBusLevel(level) && settersSucceeded
             return this
         }
 
         fun maxBusLevel(level: Int): UpdateBuilder {
-            setMaxBusLevel(level)
+            settersSucceeded = setMaxBusLevel(level) && settersSucceeded
             return this
         }
 
         fun build(): Boolean {
+            if (!settersSucceeded) {
+                cancelUpdate()
+                return false
+            }
             return commit()
         }
     }
@@ -313,11 +572,40 @@ object PowerManager {
      * Execute a batch update using a builder pattern.
      * All updates are collected and executed in a single call for PServerDriver.
      */
-    inline fun update(block: UpdateBuilder.() -> Unit): Boolean {
-        beginUpdate()
-        val builder = UpdateBuilder()
-        builder.block()
-        return builder.build()
+    fun update(block: UpdateBuilder.() -> Unit): Boolean {
+        return powerOperationLock.withLock {
+            synchronized(lifecycleLock) {
+                if (isSessionStopping) return@withLock false
+            }
+            updateInternal(block)
+        }
+    }
+
+    private fun updateInternal(block: UpdateBuilder.() -> Unit): Boolean {
+        val profileSnapshot = synchronized(lifecycleLock) { currentProfile?.copy() }
+        var updateStarted = false
+        try {
+            beginUpdate()
+            updateStarted = true
+            val builder = UpdateBuilder()
+            builder.block()
+            val succeeded = builder.build()
+            if (!succeeded) {
+                cancelUpdate()
+                synchronized(lifecycleLock) { currentProfile = profileSnapshot }
+            }
+            return succeeded
+        } catch (exception: Throwable) {
+            if (updateStarted) {
+                try {
+                    cancelUpdate()
+                } catch (cleanupException: Throwable) {
+                    exception.addSuppressed(cleanupException)
+                }
+            }
+            synchronized(lifecycleLock) { currentProfile = profileSnapshot }
+            throw exception
+        }
     }
 
     // ========================================
@@ -355,43 +643,51 @@ object PowerManager {
     }
 
     fun setProfileName(name: String) {
-        currentProfile?.name = name
+        powerOperationLock.withLock {
+            synchronized(lifecycleLock) {
+                if (!isSessionStopping) currentProfile?.name = name
+            }
+        }
     }
 
     /**
      * Set CPU governor
      */
     fun setGovernor(governor: String): Boolean {
-        val result = getDriver().setGovernor(governor)
-        if (result) {
-            val cpuGovernor = CpuGovernor.fromString(governor)
-            if (cpuGovernor != null) {
-                currentProfile?.governor = cpuGovernor
+        return runProfileOperation(false) {
+            val result = getDriver().setGovernor(governor)
+            if (result) {
+                val cpuGovernor = CpuGovernor.fromString(governor)
+                if (cpuGovernor != null) {
+                    synchronized(lifecycleLock) { currentProfile?.governor = cpuGovernor }
+                }
             }
+            result
         }
-        return result
     }
 
     /**
      * Set minimum CPU Value in KHz / Integer
      */
     fun setMinCpuValue(frequency: Long): Boolean {
-        val result = getDriver().setMinCpuValue(frequency)
-        if (result) {
-            currentProfile?.minCpuFreq = frequency
+        return runProfileOperation(false) {
+            val driver = getDriver()
+            val result = driver.setMinCpuValue(frequency)
+            if (result) synchronizeProfileCpuBounds(driver)
+            result
         }
-        return result
     }
 
     /**
      * Set maximum CPU Value in KHz / Integer
      */
     fun setMaxCpuValue(frequency: Long): Boolean {
-        val result = getDriver().setMaxCpuValue(frequency)
-        if (result) {
-            currentProfile?.maxCpuFreq = frequency
+        return runProfileOperation(false) {
+            val driver = getDriver()
+            val result = driver.setMaxCpuValue(frequency)
+            if (result) synchronizeProfileCpuBounds(driver)
+            result
         }
-        return result
     }
 
     // ========================================
@@ -434,22 +730,24 @@ object PowerManager {
      * Set minimum GPU power level (0 = fastest, higher = slower)
      */
     fun setMinGpuPowerLevel(level: Int): Boolean {
-        val result = getDriver().setMinGpuPowerLevel(level)
-        if (result) {
-            currentProfile?.minGpuPowerLevel = level
+        return runProfileOperation(false) {
+            val driver = getDriver()
+            val result = driver.setMinGpuPowerLevel(level)
+            if (result) synchronizeProfileGpuBounds(driver)
+            result
         }
-        return result
     }
 
     /**
      * Set maximum GPU power level (0 = fastest, higher = slower)
      */
     fun setMaxGpuPowerLevel(level: Int): Boolean {
-        val result = getDriver().setMaxGpuPowerLevel(level)
-        if (result) {
-            currentProfile?.maxGpuPowerLevel = level
+        return runProfileOperation(false) {
+            val driver = getDriver()
+            val result = driver.setMaxGpuPowerLevel(level)
+            if (result) synchronizeProfileGpuBounds(driver)
+            result
         }
-        return result
     }
 
     // ========================================
@@ -476,23 +774,54 @@ object PowerManager {
     }
 
     fun setMinBusLevel(level: Int): Boolean {
-        val result = getDriver().setMinBusLevel(level)
-
-        if (result) {
-            currentProfile?.minBusLevel = level
+        return runProfileOperation(false) {
+            val driver = getDriver()
+            val result = driver.setMinBusLevel(level)
+            if (result) synchronizeProfileBusBounds(driver)
+            result
         }
-
-        return result
     }
 
     fun setMaxBusLevel(level: Int): Boolean {
-        val result = getDriver().setMaxBusLevel(level)
-
-        if (result) {
-            currentProfile?.maxBusLevel = level
+        return runProfileOperation(false) {
+            val driver = getDriver()
+            val result = driver.setMaxBusLevel(level)
+            if (result) synchronizeProfileBusBounds(driver)
+            result
         }
+    }
 
-        return result
+    private fun synchronizeProfileCpuBounds(driver: PerformanceDriver) {
+        val minimum = driver.getCurrentMinCpuValue()
+        val maximum = driver.getCurrentMaxCpuValue()
+        synchronized(lifecycleLock) {
+            currentProfile?.let { profile ->
+                profile.minCpuFreq = minimum
+                profile.maxCpuFreq = maximum
+            }
+        }
+    }
+
+    private fun synchronizeProfileGpuBounds(driver: PerformanceDriver) {
+        val minimum = driver.getCurrentMinGpuPowerLevel()
+        val maximum = driver.getCurrentMaxGpuPowerLevel()
+        synchronized(lifecycleLock) {
+            currentProfile?.let { profile ->
+                profile.minGpuPowerLevel = minimum
+                profile.maxGpuPowerLevel = maximum
+            }
+        }
+    }
+
+    private fun synchronizeProfileBusBounds(driver: PerformanceDriver) {
+        val minimum = driver.getCurrentMinBusLevel()
+        val maximum = driver.getCurrentMaxBusLevel()
+        synchronized(lifecycleLock) {
+            currentProfile?.let { profile ->
+                profile.minBusLevel = minimum
+                profile.maxBusLevel = maximum
+            }
+        }
     }
 
     // ========================================
@@ -503,9 +832,16 @@ object PowerManager {
      * Save a power profile to preferences
      */
     fun saveProfile() {
+        powerOperationLock.withLock {
+            val profile = synchronized(lifecycleLock) { currentProfile?.copy() }
+            saveProfile(profile)
+        }
+    }
+
+    private fun saveProfile(profile: PowerProfile?) {
         try {
-            val jsonString = if (currentProfile != null) {
-                json.encodeToString(currentProfile)
+            val jsonString = if (profile != null) {
+                json.encodeToString(profile.copy(driverId = getDriverId()))
             } else ""
             PrefManager.powerControlProfile = jsonString
             Timber.tag("PowerManager").d("Saved power profile: $jsonString")
@@ -720,27 +1056,25 @@ object PowerManager {
         try {
             val jsonString = PrefManager.powerControlProfile
             if (jsonString.isEmpty()) {
-                currentProfile = driver?.getDefaultProfile()
+                synchronized(lifecycleLock) {
+                    currentProfile = driver?.getDefaultProfile()
+                }
                 Timber.tag("PowerManager").d("No saved profile to restore")
                 return
             }
 
-            currentProfile = json.decodeFromString<PowerProfile>(jsonString)
+            val restoredProfile = json.decodeFromString<PowerProfile>(jsonString)
+            if (restoredProfile.driverId != null && restoredProfile.driverId != getDriverId()) {
+                Timber.tag("PowerManager").w("Saved power profile belongs to a different driver")
+                synchronized(lifecycleLock) {
+                    currentProfile = getDriver().getDefaultProfile()
+                }
+                return
+            }
+
             Timber.tag("PowerManager").d("Restoring power profile: $jsonString")
 
-            val success = update {
-                governor(currentProfile!!.governor.governorName)
-                minCpuValue(currentProfile!!.minCpuFreq)
-                maxCpuValue(currentProfile!!.maxCpuFreq)
-                if (isGpuSupported()) {
-                    minGpuPowerLevel(currentProfile!!.minGpuPowerLevel)
-                    maxGpuPowerLevel(currentProfile!!.maxGpuPowerLevel)
-                }
-                if (isBusSupported()) {
-                    minBusLevel(currentProfile!!.minBusLevel)
-                    maxBusLevel(currentProfile!!.maxBusLevel)
-                }
-            }
+            val success = applyProfile(restoredProfile)
 
             if (success) {
                 Timber.tag("PowerManager").i("Successfully restored power profile")
@@ -753,7 +1087,15 @@ object PowerManager {
             }
         } catch (e: Exception) {
             Timber.tag("PowerManager").e(e, "Failed to restore power profile, falling back to default")
-            currentProfile = getDriver().getDefaultProfile()
+            synchronized(lifecycleLock) {
+                currentProfile = getDriver().getDefaultProfile()
+            }
         }
+    }
+
+    private fun getDriverId(): String = when (getDriver()) {
+        is PServerDriver -> "pserver"
+        is SamsungPerformanceDriver -> "samsung"
+        else -> "noop"
     }
 }

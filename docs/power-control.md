@@ -19,11 +19,10 @@ GameNative's performance control system provides CPU and GPU tuning capabilities
      - `isGovernorSupported()` - CPU governor control support (default: false)
      - `isGpuSupported()` - GPU control support (default: false)
      - `isBusSupported()` - RAM bus control support (default: false)
-     - `isFanSupported()` - Fan control support (default: false)
      - `start()` - Initialize driver when game starts (default: no-op)
      - `stop()` - Cleanup driver when game stops (default: no-op)
      - `beginUpdate()` - Begin batch update session (default: no-op)
-     - `commit()` - Commit pending updates (default: returns true)
+      - `commit()` - Commit pending updates (default: returns true; unavailable driver returns false)
      - `getDefaultProfile()` - Returns default Balanced profile for the device
      - CPU: `getCurrentMinCpuValue()`, `getCurrentMaxCpuValue()`, `getCurrentGovernor()`
      - CPU: `setMinCpuValue(value)`, `setMaxCpuValue(value)`, `setGovernor(governor)`
@@ -172,7 +171,7 @@ GameNative's performance control system provides CPU and GPU tuning capabilities
 
 **Lifecycle:**
 - ✅ `start()` - Restores saved profile from preferences (or applies default Balanced profile)
-  - **Automatically pins app process to efficiency cores**
+  - **~~Automatically pins app process to efficiency cores~~ (removed - see limitations)
   - **Automatically pins PulseAudio to first performance core**
   - **Starts auto-tuning if enabled in profile**
 - ✅ `stop()` - **Critical performance restoration**:
@@ -232,7 +231,7 @@ PowerManager.pinGameWithRetry(
 
 *Wine Infrastructure Pinning:*
 ```kotlin
-PowerManager.pinWineInfrastructure()
+PowerManager.pinBackgroundProcesses()
 ```
 - **wineserver** → PERFORMANCE cores (CPUs 3-6) - Critical for Wine IPC
 - **winhandler.exe** → PERFORMANCE + PRIME cores (CPUs 4-7) - Window management
@@ -315,12 +314,12 @@ val executableName = container.executablePath
     }
 
 // Pin Wine infrastructure
-PowerManager.pinWineInfrastructure()
+PowerManager.pinBackgroundProcesses()
 ```
 
 **Expected Logs:**
 ```
-PServerDriver: Pinned app process (PID: 12345) to efficiency CPUs 0, 1, 2
+PServerDriver: Pinned wineserver (PID: 12345) to efficiency CPUs 0, 1, 2
 PowerManager: Pinned PulseAudio (PID: 10642) to CPU 3
 PowerManager: Pinned DaveTheDiver.exe (PID: 11540) to CPUs 3, 4, 5, 6, 7 after 1 attempts
 PowerManager: Pinned wineserver (PID: 11309) to CPUs 3, 4, 5, 6
@@ -591,7 +590,7 @@ Drivers follow a game lifecycle pattern with automatic profile persistence:
      - Profile name changes to "Custom" when individual settings are modified
      - Preset profile names are preserved when applying complete profiles
    - PServerDriver: Writes to sysfs and sets files to 444 (read-only)
-   - SamsungPerformanceDriver: Calls `performanceManager.start(params)` with new settings
+   - SamsungPerformanceDriver: Each setter calls `performanceManager.start(params)` with a full six-value CustomParams snapshot; cached state changes only after the SDK call succeeds
 
 3. **Game Environment Shutdown** (`PluviaApp.shutdownEnvironment()`)
    - `PowerManager.stop()` is called
@@ -656,7 +655,12 @@ Samsung SDK uses performance levels (1-4) instead of raw frequencies:
 **CustomParams API:**
 ```kotlin
 val params = CustomParams()
-params.add(CustomParams.TYPE_CPU_MIN, level, timeout)
+params.add(CustomParams.TYPE_CPU_MIN, cpuMin, timeout)
+params.add(CustomParams.TYPE_CPU_MAX, cpuMax, timeout)
+params.add(CustomParams.TYPE_GPU_MIN, gpuMin, timeout)
+params.add(CustomParams.TYPE_GPU_MAX, gpuMax, timeout)
+params.add(CustomParams.TYPE_BUS_MIN, busMin, timeout)
+params.add(CustomParams.TYPE_BUS_MAX, busMax, timeout)
 performanceManager.start(params)
 ```
 
@@ -673,8 +677,8 @@ Available parameter types:
 
 **Start/Stop Behavior:**
 - `start()`: No-op - Performance controls are started individually by setter methods
-  - Each setter (`setMinCpuValue`, `setMaxCpuValue`, etc.) calls `performanceManager.start(params)`
-  - This allows fine-grained control per parameter
+  - Each setter (`setMinCpuValue`, `setMaxCpuValue`, etc.) calls `performanceManager.start(params)` with all six current values
+  - The driver updates its cached values only after the SDK call succeeds
 - `stop()`: Calls `performanceManager.stop()` to stop ALL active performance controls
   - Called automatically when game environment shuts down
   - Releases all performance locks

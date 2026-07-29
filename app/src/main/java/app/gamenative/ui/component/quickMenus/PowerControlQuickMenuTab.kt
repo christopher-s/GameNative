@@ -105,24 +105,8 @@ fun PowerControlQuickMenuTab(
             coroutineScope.launch(Dispatchers.IO) {
                 Timber.d("Applying profile: $profile")
 
-                // Update PowerManager's current profile reference immediately
                 val updatedProfile = profile.copy(enableAutoTuning = false)
-                PowerManager.setCurrentProfile(updatedProfile)
-
-                val success = PowerManager.update {
-                    name(updatedProfile.name)
-                    governor(updatedProfile.governor.governorName)
-                    minCpuValue(updatedProfile.minCpuFreq)
-                    maxCpuValue(updatedProfile.maxCpuFreq)
-                    if (PowerManager.isGpuSupported()) {
-                        minGpuPowerLevel(updatedProfile.minGpuPowerLevel)
-                        maxGpuPowerLevel(updatedProfile.maxGpuPowerLevel)
-                    }
-                    if (PowerManager.isBusSupported()) {
-                        minBusLevel(updatedProfile.minBusLevel)
-                        maxBusLevel(updatedProfile.maxBusLevel)
-                    }
-                }
+                val success = PowerManager.applyProfile(updatedProfile)
 
                 Timber.d("Profile application result: $success")
                 refreshTrigger++
@@ -301,7 +285,7 @@ private fun rememberPowerControlState(refreshTrigger: Int): State<PowerControlUi
                         maxBusLevel = ramDisplayInfo?.maxBusLevel ?: 0
                     )).copy(
                         // Preserve enableAutoTuning and tuningStrategy from PowerManager's current profile
-                        enableAutoTuning = PowerManager.currentProfile?.enableAutoTuning ?: true,
+                        enableAutoTuning = PowerManager.currentProfile?.enableAutoTuning ?: false,
                         tuningStrategy = PowerManager.currentProfile?.tuningStrategy ?: AutoTuningStrategy.POWER_EFFICIENT
                     )
 

@@ -2175,12 +2175,8 @@
 
     <!-- Power Control -->
     <string name="power_control">性能控制</string>
-    <string name="power_control_info">控制CPU频率调节和调速器设置。需要PServer服务。</string>
-    <string name="power_control_driver">驱动：%s</string>
     <string name="power_control_profiles">性能配置</string>
     <string name="power_control_governor">CPU调速器</string>
-    <string name="power_control_current_frequencies">当前频率</string>
-    <string name="power_control_frequencies">频率设置</string>
     <string name="power_control_cpu_min_freq">最低CPU频率</string>
     <string name="power_control_cpu_max_freq">最高CPU频率</string>
     <string name="power_control_gpu_freq">GPU频率</string>
@@ -2188,7 +2184,6 @@
     <string name="power_control_gpu_max_power">最高GPU功率</string>
     <string name="power_control_ram_min_power">最低RAM频率</string>
     <string name="power_control_ram_max_power">最高RAM频率</string>
-    <string name="power_control_available_frequencies">可用频率</string>
     <string name="power_control_auto_tuning">自动调整</string>
     <string name="power_control_auto_tuning_desc">根据帧率自动调整性能</string>
     <string name="power_control_tuning_strategy">调整策略</string>

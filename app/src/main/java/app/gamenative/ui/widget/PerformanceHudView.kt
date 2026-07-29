@@ -133,6 +133,7 @@ class PerformanceHudView(
     // ── Mali gpuinfo delta sampling (for devices without a utilisation sysfs node)
     private var lastMaliGpuInfoMs: Long? = null
     private var lastMaliGpuInfoWallMs: Long = 0L
+    private val kgslGpubusyTracker = KgslGpubusyTracker()
 
     private var thermalZoneDiscoveryLogged = false
     private var thermalZonesCache: List<Pair<String, String>>? = null
@@ -740,8 +741,9 @@ class PerformanceHudView(
                 if (parts.size < 2) return null
                 val busy = parts[0].toLongOrNull() ?: return null
                 val total = parts[1].toLongOrNull() ?: return null
-                if (total <= 0L) return null
-                GpuUsageReading(((busy * 100L) / total).toInt().coerceIn(0, 100), path)
+                kgslGpubusyTracker.sample(busy, total)?.let { percent ->
+                    GpuUsageReading(percent, path)
+                }
             }
             "gpuinfo" -> {
                 val line = readNthLine(path, 1)?.trim() ?: return null
@@ -1243,5 +1245,24 @@ class PerformanceHudView(
         const val MIN_HUD_TEXT_SHADOW_RADIUS_PX = 1.5f
         const val MAX_HUD_TEXT_SHADOW_RADIUS_PX = 4f
         val HUD_TEXT_SHADOW_COLOR: Int = Color.argb(220, 0, 0, 0)
+    }
+}
+
+internal class KgslGpubusyTracker {
+    private var previousBusy: Long? = null
+    private var previousTotal: Long? = null
+
+    fun sample(busy: Long, total: Long): Int? {
+        val lastBusy = previousBusy
+        val lastTotal = previousTotal
+        previousBusy = busy
+        previousTotal = total
+        if (lastBusy == null || lastTotal == null || total <= 0L) return null
+
+        val busyDelta = busy - lastBusy
+        val totalDelta = total - lastTotal
+        if (busyDelta < 0L || totalDelta <= 0L) return null
+
+        return ((busyDelta * 100L) / totalDelta).toInt().coerceIn(0, 100)
     }
 }

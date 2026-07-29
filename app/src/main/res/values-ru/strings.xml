@@ -2089,12 +2089,8 @@ https://gamenative.app
 
     <!-- Power Control -->
     <string name="power_control">Управление производительностью</string>
-    <string name="power_control_info">Управление масштабированием частоты процессора и настройками регулятора. Требуется служба PServer.</string>
-    <string name="power_control_driver">Драйвер: %s</string>
     <string name="power_control_profiles">Профили производительности</string>
     <string name="power_control_governor">Регулятор ЦП</string>
-    <string name="power_control_current_frequencies">Текущие частоты</string>
-    <string name="power_control_frequencies">Настройки частоты</string>
     <string name="power_control_cpu_min_freq">Минимальная частота ЦП</string>
     <string name="power_control_cpu_max_freq">Максимальная частота ЦП</string>
     <string name="power_control_gpu_freq">Частота ГП</string>
@@ -2102,7 +2098,6 @@ https://gamenative.app
     <string name="power_control_gpu_max_power">Максимальная мощность ГП</string>
     <string name="power_control_ram_min_power">Минимальная частота ОЗУ</string>
     <string name="power_control_ram_max_power">Максимальная частота ОЗУ</string>
-    <string name="power_control_available_frequencies">Доступные частоты</string>
     <string name="power_control_auto_tuning">Автонастройка</string>
     <string name="power_control_auto_tuning_desc">Автоматическая настройка производительности на основе FPS</string>
     <string name="power_control_tuning_strategy">Стратегия настройки</string>

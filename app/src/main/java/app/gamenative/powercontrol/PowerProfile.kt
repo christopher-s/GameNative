@@ -15,7 +15,7 @@ enum class AutoTuningStrategy(@param:StringRes val displayNameRes: Int, @param:S
 
 @Serializable
 data class PowerProfile(
-    var enableAutoTuning: Boolean = true,
+    var enableAutoTuning: Boolean = false,
     var tuningStrategy: AutoTuningStrategy = AutoTuningStrategy.BALANCED,
     var name: String,
     var governor: CpuGovernor,
@@ -25,6 +25,7 @@ data class PowerProfile(
     var maxGpuPowerLevel: Int = 0,
     var minBusLevel: Int = 0,
     var maxBusLevel: Int = 0,
+    var driverId: String? = null,
 )
 
 object PowerProfiles {
