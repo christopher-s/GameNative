@@ -32,6 +32,9 @@
 >
 > - **Accessible game storage** — games can be installed to a user-accessible storage location (or a custom storage root of your choice) instead of app-private storage, so you can browse, back up and mod game files with any file manager.
 > - **Steam Store details in-app** — the game screen shows cached Steam Store info (description, publishers, Metacritic score, release status) and a screenshot gallery with pinch-to-zoom — available offline once cached.
+> - **Display refresh rate follows the FPS cap** — supported Android devices request a matching display frame rate when the in-game FPS limit changes, helping reduce unnecessary display work and improve frame pacing.
+> - **Adaptive resolution scaling** — expanded resolution and aspect-ratio controls can automatically scale rendering to balance image quality and GPU performance for each game and device.
+> - **Experimental CPU/GPU power controls** — supported rooted handhelds and Samsung devices can tune CPU, GPU and memory-bus performance, apply saved profiles and optionally auto-tune while a game is running, with original hardware settings restored afterward.
 > - **Side-by-side debug builds** — debug builds use a distinct application ID, so the fork can be installed next to the official app without clobbering it.
 >
 > Everything else — compatibility, features, cloud saves — matches upstream.
