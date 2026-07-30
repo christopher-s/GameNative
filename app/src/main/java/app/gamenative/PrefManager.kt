@@ -623,7 +623,7 @@ object PrefManager {
 
     private val FEXCORE_PRESET = stringPreferencesKey("fexcore_preset")
     var fexcorePreset: String
-        get() = getPref(FEXCORE_PRESET, com.winlator.fexcore.FEXCorePreset.INTERMEDIATE)
+        get() = getPref(FEXCORE_PRESET, com.winlator.fexcore.FEXCorePreset.EXTREME)
         set(value) {
             setPref(FEXCORE_PRESET, value)
         }

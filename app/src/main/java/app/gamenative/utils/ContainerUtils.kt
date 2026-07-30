@@ -37,7 +37,7 @@ object ContainerUtils {
         val name: String,
     )
 
-    const val WRAPPER_TURNIP_CAPABLE = "Turnip v26.2.0 R4"
+    const val WRAPPER_TURNIP_CAPABLE = "Turnip v26.3.0-R1-OneUI"
     const val WRAPPER_ADRENO_8ELITE_GEN5 = "Turnip Adreno Driver T26 (@Mr_Purple_666)"
     const val WRAPPER_ADRENO_8ELITE = "Turnip Gen8 V30"
     const val WRAPPER_ADRENO_A12 = "Turnip v26.1.0 A12 Fix"

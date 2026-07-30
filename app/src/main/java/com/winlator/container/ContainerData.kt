@@ -15,7 +15,7 @@ data class ContainerData(
     val envVars: String = Container.DEFAULT_ENV_VARS,
     val graphicsDriver: String = Container.DEFAULT_GRAPHICS_DRIVER,
     val graphicsDriverVersion: String = "",
-    val graphicsDriverConfig: String = "",
+    val graphicsDriverConfig: String = Container.DEFAULT_GRAPHICSDRIVERCONFIG,
     val rendererPresentMode: String = "fifo",
     val displayRenderer: String = Container.DEFAULT_DISPLAY_RENDERER,
     val sfCompatMode: Boolean = true,
@@ -55,7 +55,7 @@ data class ContainerData(
     val fexcoreX87Mode: String = "Fast",
     val fexcoreMultiBlock: String = "Disabled",
     // FEXCore preset (arm64ec)
-    val fexcorePreset: String = FEXCorePreset.INTERMEDIATE,
+    val fexcorePreset: String = FEXCorePreset.EXTREME,
     // wine registry
     val renderer: String = "gl",
     val csmt: Boolean = true,
@@ -220,7 +220,7 @@ data class ContainerData(
                     fexcoreTSOMode = (savedMap["fexcoreTSOMode"] as? String) ?: "Fast",
                     fexcoreX87Mode = (savedMap["fexcoreX87Mode"] as? String) ?: "Fast",
                     fexcoreMultiBlock = (savedMap["fexcoreMultiBlock"] as? String) ?: "Disabled",
-                    fexcorePreset = (savedMap["fexcorePreset"] as? String) ?: FEXCorePreset.INTERMEDIATE,
+                    fexcorePreset = (savedMap["fexcorePreset"] as? String) ?: FEXCorePreset.EXTREME,
                     sdlControllerAPI = savedMap["sdlControllerAPI"] as Boolean,
                     useSteamInput = (savedMap["useSteamInput"] as? Boolean) ?: false,
                     enableXInput = savedMap["enableXInput"] as Boolean,
