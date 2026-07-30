@@ -2191,4 +2191,5 @@
     <string name="power_control_strategy_aggressive_desc">Maximizes performance on detected bottlenecks</string>
     <string name="power_control_strategy_conservative">Conservative</string>
     <string name="power_control_strategy_conservative_desc">Adjusts gradually with a focus on stability</string>
+    <string name="power_control_unavailable">Power controls are unavailable right now. Close and reopen this menu to try again.</string>
 </resources>

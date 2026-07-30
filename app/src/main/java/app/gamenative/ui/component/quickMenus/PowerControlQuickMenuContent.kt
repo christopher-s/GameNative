@@ -70,6 +70,9 @@ fun PowerControlQuickMenuContent(
             is PowerControlUiState.Loading -> {
                 LoadingView()
             }
+            is PowerControlUiState.Error -> {
+                ErrorView()
+            }
             is PowerControlUiState.Success -> {
                 SuccessView(
                     state = uiState,
@@ -132,6 +135,22 @@ private fun LoadingView() {
             text = stringResource(R.string.main_loading),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ErrorView() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = stringResource(R.string.power_control_unavailable),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
         )
     }
 }

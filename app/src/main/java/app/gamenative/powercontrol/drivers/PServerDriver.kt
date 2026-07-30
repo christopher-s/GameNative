@@ -412,8 +412,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
                 val cpuRestored = restoreCpuState()
                 val gpuRestored = restoreGpuState()
                 val modesRestored = restoreSysfsModes()
-                val affinityRestored = resetAppCpuAffinity()
-                if (!cpuRestored || !gpuRestored || !modesRestored || !affinityRestored) {
+                if (!cpuRestored || !gpuRestored || !modesRestored) {
                     Timber.tag(TAG).e("PServer restoration failed; discarding session baseline")
                 }
             }
@@ -1080,32 +1079,6 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     }
 
     /**
-     * Reset the current app process to use all available CPU cores.
-     *
-     * @return true if successful
-     */
-    fun resetAppCpuAffinity(): Boolean {
-        val appPid = android.os.Process.myPid()
-
-        // Get all available cores from all clusters
-        val effCores = getCpuCoresByCluster(CpuCluster.EFFICIENCY)
-        val perfCores = getCpuCoresByCluster(CpuCluster.PERFORMANCE)
-        val primeCores = getCpuCoresByCluster(CpuCluster.PRIME)
-        val allCores = (effCores + perfCores + primeCores).sorted()
-
-        if (allCores.isEmpty()) {
-            Timber.tag(TAG).w("No CPU cores found for reset")
-            return false
-        }
-
-        val success = setCpuAffinityByCores(appPid, allCores)
-        if (success) {
-            Timber.tag(TAG).i("Reset app process (PID: $appPid) to all CPUs ${allCores.joinToString()}")
-        }
-        return success
-    }
-
-    /**
      * Pin a process to specific CPU cores using taskset.
      *
      * @param pid Process ID to pin
@@ -1504,6 +1477,8 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     }
 
     private fun captureSessionBaseline(): Boolean {
+        // Never re-baseline over a live tuned state; a valid baseline is only cleared by stop()
+        if (baselineState.isValid) return true
         clearSessionBaseline()
         val cpuCaptured = captureCpuPolicySnapshot()
         val gpuRequired = isGpuSupported()

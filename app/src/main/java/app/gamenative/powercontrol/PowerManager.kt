@@ -11,6 +11,7 @@ import app.gamenative.powercontrol.drivers.SamsungPerformanceDriver
 import app.gamenative.powercontrol.profiles.CpuGovernor
 import kotlinx.serialization.json.Json
 import timber.log.Timber
+import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -36,6 +37,17 @@ object PowerManager {
     private var isAutoTunerStopping = false
     private var startingSessionGeneration: Long? = null
     private val sessionState = PowerSessionState()
+
+    // Serializes pause/resume work in call order; driver root calls must not run on the UI thread
+    private val suspendExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "PowerManagerSuspend").apply { isDaemon = true }
+    }
+
+    @Volatile
+    private var isPaused = false
+
+    // Guarded by lifecycleLock; tracks whether the driver has actually been stopped
+    private var driverStopped = true
 
     /**
      * The currently active power profile.
@@ -143,6 +155,7 @@ object PowerManager {
             if (hasActiveSession) return
             hasActiveSession = true
             isSessionStarting = true
+            isPaused = false
             startGeneration = sessionState.start()
             startingSessionGeneration = startGeneration
         }
@@ -154,7 +167,10 @@ object PowerManager {
                 // Pin PulseAudio to dedicated performance core if PServer is available
                 pinPulseAudioToDedicatedCore()
             }
-            synchronized(lifecycleLock) { finishSessionStartLocked(startGeneration) }
+            synchronized(lifecycleLock) {
+                driverStopped = false
+                finishSessionStartLocked(startGeneration)
+            }
         } catch (throwable: Throwable) {
             val tuner: PerformanceAutoTuner?
             synchronized(lifecycleLock) {
@@ -196,24 +212,86 @@ object PowerManager {
             isSessionStopping = true
             sessionState.invalidate()
             tuner = detachAutoTunerLocked()
-            driverToStop = getDriver().takeIf { hasActiveSession }
+            driverToStop = getDriver().takeIf { hasActiveSession && !driverStopped }
         }
 
         try {
             tuner?.stop()
             powerOperationLock.withLock {
                 val profileToSave = synchronized(lifecycleLock) { currentProfile?.copy() }
-                if (driverToStop != null) {
-                    saveProfile(profileToSave)
-                    driverToStop.stop()
-                }
+                saveProfile(profileToSave)
+                driverToStop?.stop()
             }
         } finally {
             synchronized(lifecycleLock) {
                 hasActiveSession = false
+                isPaused = false
+                driverStopped = true
                 finishAutoTunerStopLocked()
                 isSessionStopping = false
                 lifecycleLock.notifyAll()
+            }
+        }
+    }
+
+    /**
+     * Pause power management while the game is suspended.
+     * Saves the active profile, stops auto-tuning, and restores hardware state
+     * without ending the session, so [resume] can re-apply the profile.
+     */
+    fun pause() {
+        synchronized(lifecycleLock) {
+            if (!hasActiveSession || isSessionStopping || isSessionStarting || isPaused) return
+            isPaused = true
+        }
+        suspendExecutor.execute {
+            try {
+                synchronized(lifecycleLock) {
+                    if (!hasActiveSession || isSessionStopping || !isPaused) return@execute
+                }
+                saveProfile()
+                stopAutoTuning()
+                powerOperationLock.withLock {
+                    synchronized(lifecycleLock) {
+                        if (!hasActiveSession || isSessionStopping || isSessionStarting || !isPaused || driverStopped) {
+                            return@withLock
+                        }
+                    }
+                    getDriver().stop()
+                    synchronized(lifecycleLock) { driverStopped = true }
+                }
+            } catch (throwable: Throwable) {
+                Timber.tag("PowerManager").e(throwable, "Failed to pause power management")
+            }
+        }
+    }
+
+    /**
+     * Resume power management after a game suspend.
+     * Restarts the driver and re-applies the saved profile, restarting auto-tuning if enabled.
+     */
+    fun resume() {
+        synchronized(lifecycleLock) {
+            if (!hasActiveSession || isSessionStopping || isSessionStarting || !isPaused) return
+            isPaused = false
+        }
+        suspendExecutor.execute {
+            try {
+                synchronized(lifecycleLock) {
+                    if (!hasActiveSession || isSessionStopping) return@execute
+                }
+                powerOperationLock.withLock {
+                    synchronized(lifecycleLock) {
+                        if (!hasActiveSession || isSessionStopping || isSessionStarting || !driverStopped) {
+                            return@withLock
+                        }
+                    }
+                    getDriver().start()
+                    restoreSavedProfile()
+                    synchronized(lifecycleLock) { driverStopped = false }
+                }
+            } catch (throwable: Throwable) {
+                Timber.tag("PowerManager").e(throwable, "Failed to resume power management")
             }
         }
     }
@@ -329,6 +407,18 @@ object PowerManager {
                 lifecycleLock.notifyAll()
             }
         }
+    }
+
+    /**
+     * Snapshot of the effective profile: the current profile if one is set, otherwise the
+     * driver's default profile. Guarantees callers (e.g. the quick-menu UI) always have a
+     * profile to mutate, even before a session starts or after a failed profile restore.
+     */
+    fun getEffectiveProfile(): PowerProfile {
+        synchronized(lifecycleLock) {
+            currentProfile?.let { return it.copy() }
+        }
+        return getDriver().getDefaultProfile()
     }
 
     /**
@@ -1010,8 +1100,11 @@ object PowerManager {
                     // Use Wine-specific search for .exe files, regular pidof for others
                     val pid = if (isWineExecutable) {
                         driver.findRunningProcesses(processName).find {
-                            it.second.endsWith(processName, ignoreCase = true) &&
-                            !it.second.contains("winhandler.exe")
+                            !it.second.contains("winhandler.exe") &&
+                            (
+                                it.second.endsWith(processName, ignoreCase = true) ||
+                                it.second.startsWith("A:\\$processName", ignoreCase = true)
+                            )
                         }?.first
                     } else {
                         driver.getProcessId(processName)
@@ -1057,7 +1150,7 @@ object PowerManager {
             val jsonString = PrefManager.powerControlProfile
             if (jsonString.isEmpty()) {
                 synchronized(lifecycleLock) {
-                    currentProfile = driver?.getDefaultProfile()
+                    currentProfile = getDriver().getDefaultProfile()
                 }
                 Timber.tag("PowerManager").d("No saved profile to restore")
                 return
@@ -1079,7 +1172,12 @@ object PowerManager {
             if (success) {
                 Timber.tag("PowerManager").i("Successfully restored power profile")
             } else {
-                Timber.tag("PowerManager").w("Failed to restore power profile")
+                Timber.tag("PowerManager").w("Failed to restore power profile, falling back to default")
+                synchronized(lifecycleLock) {
+                    if (currentProfile == null) {
+                        currentProfile = getDriver().getDefaultProfile()
+                    }
+                }
             }
 
             if (currentProfile?.enableAutoTuning == true) {
@@ -1088,7 +1186,9 @@ object PowerManager {
         } catch (e: Exception) {
             Timber.tag("PowerManager").e(e, "Failed to restore power profile, falling back to default")
             synchronized(lifecycleLock) {
-                currentProfile = getDriver().getDefaultProfile()
+                if (currentProfile == null) {
+                    currentProfile = getDriver().getDefaultProfile()
+                }
             }
         }
     }
