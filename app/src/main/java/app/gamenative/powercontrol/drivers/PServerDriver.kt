@@ -24,6 +24,8 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
 
     companion object {
         private const val TAG = "PServerDriver"
+        private val WHITESPACE_REGEX = Regex("\\s+")
+        private val SYSFS_MODE_REGEX = Regex("[0-7]{3,4}")
 
         // CPU sysfs paths
         private const val CPU_BASE_PATH = "/sys/devices/system/cpu"
@@ -500,7 +502,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     override fun getAvailableGovernors(): List<String> {
         return try {
             val governors = readSysfsFile("$POLICY0_PATH/scaling_available_governors")
-            governors?.split("\\s+".toRegex())?.filter { it.isNotBlank() } ?: emptyList()
+            governors?.split(WHITESPACE_REGEX)?.filter { it.isNotBlank() } ?: emptyList()
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to get available governors")
             emptyList()
@@ -520,14 +522,14 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
                 for (policy in cpuPolicies) {
                     val policyDir = policy.governorPath.substringBeforeLast("/")
                     val freqs = readSysfsFile("$policyDir/scaling_available_frequencies")
-                    freqs?.split("\\s+".toRegex())
+                    freqs?.split(WHITESPACE_REGEX)
                         ?.mapNotNull { it.toLongOrNull() }
                         ?.let { allFrequencies.addAll(it) }
                 }
             } else {
                 // Fallback: read from policy0 only
                 val freqs = readSysfsFile("$POLICY0_PATH/scaling_available_frequencies")
-                freqs?.split("\\s+".toRegex())
+                freqs?.split(WHITESPACE_REGEX)
                     ?.mapNotNull { it.toLongOrNull() }
                     ?.let { allFrequencies.addAll(it) }
             }
@@ -654,7 +656,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
     override fun getAvailableGpuFrequencies(): List<Long> {
         return try {
             val freqs = readSysfsFile("$GPU_DEVFREQ_PATH/available_frequencies")
-            freqs?.split("\\s+".toRegex())
+            freqs?.split(WHITESPACE_REGEX)
                 ?.mapNotNull { it.toLongOrNull() }
                 ?.map { it / 1000 }
                 ?.sorted()
@@ -1466,7 +1468,7 @@ class PServerDriver(private val context: Context? = null) : PerformanceDriver() 
         originalSysfsModes[path]?.let { return it }
         val mode = executeCheckedAsRoot("stat -c %a '$path'").getOrNull()
             ?.trim()
-            ?.takeIf { it.matches(Regex("[0-7]{3,4}")) }
+            ?.takeIf { it.matches(SYSFS_MODE_REGEX) }
             ?: return null
         originalSysfsModes[path] = mode
         return mode

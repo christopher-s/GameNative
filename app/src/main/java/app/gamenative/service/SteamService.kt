@@ -938,8 +938,9 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         fun getMainAppDepots(appId: Int, containerLanguage: String): Map<Int, DepotInfo> {
             val appInfo = getAppInfoOf(appId) ?: return emptyMap()
-            val ownedDlc = runBlocking { getOwnedAppDlc(appId) }
-            val hasSteamUnlockedBranch = runBlocking { getSteamUnlockedBranches(appId).isNotEmpty() }
+            val (ownedDlc, hasSteamUnlockedBranch) = runBlocking {
+                getOwnedAppDlc(appId) to getSteamUnlockedBranches(appId).isNotEmpty()
+            }
             val licensedDepots = getLicensedDepotIds(appId).orEmpty().toMutableSet()
 
             // Use the dlcAppID of the ownedDlc, to find the licensed depotIds from steam_license
@@ -991,8 +992,9 @@ class SteamService : Service(), IChallengeUrlChanged {
          */
         fun getDownloadableDepots(appId: Int, preferredLanguage: String): Map<Int, DepotInfo> {
             val appInfo = getAppInfoOf(appId) ?: return emptyMap()
-            val ownedDlc = runBlocking { getOwnedAppDlc(appId) }
-            val hasSteamUnlockedBranch = runBlocking { getSteamUnlockedBranches(appId).isNotEmpty() }
+            val (ownedDlc, hasSteamUnlockedBranch) = runBlocking {
+                getOwnedAppDlc(appId) to getSteamUnlockedBranches(appId).isNotEmpty()
+            }
             val licensedDepots = getLicensedDepotIds(appId).orEmpty().toMutableSet()
 
             val map = getMainAppDepots(appId, preferredLanguage).toMutableMap()

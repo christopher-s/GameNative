@@ -137,6 +137,8 @@ import timber.log.Timber
 
 // https://partner.steamgames.com/doc/store/assets/libraryassets#4
 
+private val releaseYearFormat = SimpleDateFormat("yyyy", Locale.getDefault())
+
 @Composable
 private fun SkeletonText(
     modifier: Modifier = Modifier,
@@ -875,7 +877,7 @@ internal fun AppScreenContent(
                     // Developer and year
                     val releaseYear = remember(displayInfo.releaseDate) {
                         if (displayInfo.releaseDate > 0) {
-                            SimpleDateFormat("yyyy", Locale.getDefault()).format(Date(displayInfo.releaseDate * 1000))
+                            releaseYearFormat.format(Date(displayInfo.releaseDate * 1000))
                         } else {
                             ""
                         }

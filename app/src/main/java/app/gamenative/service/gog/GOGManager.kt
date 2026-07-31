@@ -551,11 +551,12 @@ class GOGManager @Inject constructor(
 
             // Update database if status changed
             val gameId = libraryItem.gameId.toString()
-            val game = runBlocking { getGameFromDbById(gameId) }
-            if (game != null && isInstalled != game.isInstalled) {
-                val installPath = if (isInstalled) getGameInstallPath(gameId, libraryItem.name) else ""
-                val updatedGame = game.copy(isInstalled = isInstalled, installPath = installPath)
-                runBlocking { gogGameDao.update(updatedGame) }
+            runBlocking {
+                val game = getGameFromDbById(gameId)
+                if (game != null && isInstalled != game.isInstalled) {
+                    val installPath = if (isInstalled) getGameInstallPath(gameId, libraryItem.name) else ""
+                    gogGameDao.update(game.copy(isInstalled = isInstalled, installPath = installPath))
+                }
             }
 
             return isInstalled

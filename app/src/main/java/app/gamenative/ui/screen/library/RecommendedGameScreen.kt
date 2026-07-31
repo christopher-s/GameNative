@@ -487,11 +487,13 @@ private fun featuredStatusText(status: String?): Pair<Int, Int>? = when (status?
     else -> null
 }
 
+private val releaseDateInputFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+private val releaseDateOutputFormat = java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM)
+
 private fun formatReleaseDate(raw: String): String? = try {
-    val input = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-    val parsed = input.parse(raw.take(10))
+    val parsed = releaseDateInputFormat.parse(raw.take(10))
     if (parsed != null) {
-        java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(parsed)
+        releaseDateOutputFormat.format(parsed)
     } else {
         raw
     }

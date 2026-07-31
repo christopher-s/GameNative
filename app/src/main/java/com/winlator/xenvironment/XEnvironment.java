@@ -19,12 +19,14 @@ import app.gamenative.powercontrol.PowerManager;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 
 public class XEnvironment implements Iterable<EnvironmentComponent> {
     private final Context context;
     private final ImageFs imageFs;
     private final ArrayList<EnvironmentComponent> components = new ArrayList<>();
+    private final HashMap<Class<?>, EnvironmentComponent> componentMap = new HashMap<>();
 
     private boolean winetricksRunning = false;
 
@@ -52,13 +54,11 @@ public class XEnvironment implements Iterable<EnvironmentComponent> {
     public void addComponent(EnvironmentComponent environmentComponent) {
         environmentComponent.environment = this;
         components.add(environmentComponent);
+        componentMap.put(environmentComponent.getClass(), environmentComponent);
     }
 
     public <T extends EnvironmentComponent> T getComponent(Class<T> componentClass) {
-        for (EnvironmentComponent component : components) {
-            if (component.getClass() == componentClass) return (T)component;
-        }
-        return null;
+        return componentClass.cast(componentMap.get(componentClass));
     }
 
     @Override

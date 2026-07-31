@@ -389,8 +389,14 @@ class PerformanceHudView(
         )
     }
 
+    private val whitespaceRegex = Regex("\\s+")
+    private val nonDigitRegex = Regex("[^0-9]")
+    private val timeFormatter by lazy { DateFormat.getTimeFormat(context) }
+    private val clockDate = Date()
+
     private fun readClockText(): String {
-        return "TIME ${DateFormat.getTimeFormat(context).format(Date())}"
+        clockDate.time = System.currentTimeMillis()
+        return "TIME ${timeFormatter.format(clockDate)}"
     }
 
     private fun renderSnapshot(snapshot: HudSnapshot) {
@@ -605,7 +611,7 @@ class PerformanceHudView(
     private fun readCpuUsagePercent(): Int? {
         val parts = readFirstLine("/proc/stat")
             ?.trim()
-            ?.split(Regex("\\s+"))
+            ?.split(whitespaceRegex)
 
         if (parts != null) {
             if (parts.size < 5 || parts.firstOrNull() != "cpu") {
@@ -737,7 +743,7 @@ class PerformanceHudView(
         return when (fileName) {
             "gpubusy" -> {
                 val raw = readFirstLine(path)?.trim() ?: return null
-                val parts = raw.split(Regex("\\s+"))
+                val parts = raw.split(whitespaceRegex)
                 if (parts.size < 2) return null
                 val busy = parts[0].toLongOrNull() ?: return null
                 val total = parts[1].toLongOrNull() ?: return null
@@ -747,7 +753,7 @@ class PerformanceHudView(
             }
             "gpuinfo" -> {
                 val line = readNthLine(path, 1)?.trim() ?: return null
-                val gpuMs = line.split(Regex("\\s+")).lastOrNull()?.toLongOrNull() ?: return null
+                val gpuMs = line.split(whitespaceRegex).lastOrNull()?.toLongOrNull() ?: return null
                 val now = SystemClock.elapsedRealtime()
                 val prevMs = lastMaliGpuInfoMs
                 val prevWall = lastMaliGpuInfoWallMs
@@ -767,8 +773,8 @@ class PerformanceHudView(
 
     private fun readPercentFromLine(path: String): Int? {
         val raw = readFirstLine(path)?.trim() ?: return null
-        val token = raw.split(Regex("\\s+"))
-            .map { it.replace(Regex("[^0-9]"), "") }
+        val token = raw.split(whitespaceRegex)
+            .map { it.replace(nonDigitRegex, "") }
             .firstOrNull { it.isNotEmpty() }
             ?: return null
         return token.toIntOrNull()?.coerceIn(0, 100)
@@ -1093,23 +1099,29 @@ class PerformanceHudView(
                 return
             }
 
-            val values = samples.toList()
-            val validValues = values.filter { it.isFinite() }
-            if (validValues.size < 2) {
+            var validCount = 0
+            var validMax = 0f
+            samples.forEach {
+                if (it.isFinite()) {
+                    validCount++
+                    if (it > validMax) validMax = it
+                }
+            }
+            if (validCount < 2) {
                 return
             }
 
             val chartWidth = width.toFloat()
             val chartHeight = height.toFloat()
             val maxValue = when (scaleMode) {
-                GraphScaleMode.FPS_DYNAMIC -> max(GRAPH_FPS_MIN_SCALE, (validValues.maxOrNull() ?: GRAPH_FPS_MIN_SCALE) * 1.05f)
+                GraphScaleMode.FPS_DYNAMIC -> max(GRAPH_FPS_MIN_SCALE, validMax * 1.05f)
                 GraphScaleMode.PERCENT_100 -> 100f
             }
-            val xStep = if (values.size > 1) chartWidth / (values.size - 1) else chartWidth
+            val xStep = if (samples.size > 1) chartWidth / (samples.size - 1) else chartWidth
 
             path.reset()
             var hasActiveSegment = false
-            values.forEachIndexed { index, value ->
+            samples.forEachIndexed { index, value ->
                 if (!value.isFinite()) {
                     hasActiveSegment = false
                     return@forEachIndexed

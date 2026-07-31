@@ -226,10 +226,9 @@ class PhysicalControllerHandler(
         scrollRepeatTimer = Timer()
         scrollRepeatTimer?.schedule(object : TimerTask() {
             override fun run() {
-                val bindings = synchronized(scrollRepeatLock) {
-                    activeScrollBindings.toList()
+                synchronized(scrollRepeatLock) {
+                    activeScrollBindings.forEach { sendScrollPulse(it) }
                 }
-                bindings.forEach { sendScrollPulse(it) }
             }
         }, SCROLL_REPEAT_INTERVAL_MS, SCROLL_REPEAT_INTERVAL_MS)
     }

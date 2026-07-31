@@ -317,12 +317,13 @@ class WorkshopModPathDetector {
             val lo = child.name.lowercase()
             // Skip internal/infrastructure directories
             if (lo in INSTALL_SKIP_DIRS || child.name.startsWith(".")) return@forEach
+            val childFiles = child.listFiles()
             // Skip Unity engine data directories (contain Plugins/ with native DLLs, not mods)
-            if (lo.endsWith("_data") && child.listFiles()?.any {
+            if (lo.endsWith("_data") && childFiles?.any {
                     it.name.equals("Managed", ignoreCase = true) ||
                         it.name.equals("Resources", ignoreCase = true)
                 } == true) return@forEach
-            val populated = (child.listFiles()?.size ?: 0) > 0
+            val populated = (childFiles?.size ?: 0) > 0
             val conf: Confidence? = when {
                 lo in HIGH_CONFIDENCE_NAMES -> Confidence.HIGH
                 lo in MEDIUM_CONFIDENCE_NAMES && populated -> Confidence.MEDIUM
