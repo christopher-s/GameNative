@@ -28,6 +28,10 @@
 
 ---
 
+> **Personal fork — use at your own risk.** GameNative-mod is a personal fork maintained for my own use and shared as-is, without warranty of any kind. If you choose to install and use it, you do so entirely at your own risk: **no support is offered**, and issues or feature requests for this fork will not be handled. For help with the official app, use upstream's resources instead.
+
+---
+
 > **This is a fork of [GameNative](https://github.com/utkarshdalal/GameNative)**, released as **GameNative-mod**, that tracks upstream and adds:
 >
 > - **Accessible game storage** — games can be installed to a user-accessible storage location (or a custom storage root of your choice) instead of app-private storage, so you can browse, back up and mod game files with any file manager.
@@ -76,11 +80,11 @@ It's still early. Not every game runs yet, and some need tweaking to play well, 
 
 ## Support
 
-The fastest way to get help is the [Discord server](https://discord.gg/2hKv4VfZfE) — we're 35k+ strong and someone's usually around.
+**No support is offered for GameNative-mod.** It is a personal fork provided as-is — use it at your own risk.
 
-Please **don't** open issues on GitHub; they're closed automatically. Bring it to Discord instead.
+The notes below apply to the official upstream app, not this fork. For upstream help, the fastest way is the [Discord server](https://discord.gg/2hKv4VfZfE) — they're 35k+ strong and someone's usually around. Please **don't** open issues on the upstream GitHub repo; they're closed automatically. Bring it to Discord instead.
 
-If you'd like to chip in, you can support the project on [Ko-fi](https://ko-fi.com/gamenative).
+If you'd like to support the upstream project, you can do so on [Ko-fi](https://ko-fi.com/gamenative).
 
 ## Contributing
 
