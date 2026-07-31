@@ -107,6 +107,9 @@ fun WebViewDialog(
                         },
                         onRelease = { view ->
                             view.saveState(webViewState)
+                            (view.parent as? ViewGroup)?.removeView(view)
+                            view.stopLoading()
+                            view.destroy()
                         },
                     )
                 }

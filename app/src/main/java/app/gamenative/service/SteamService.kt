@@ -148,6 +148,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.BufferOverflow
 import okio.Path.Companion.toPath
 import kotlinx.coroutines.channels.Channel
@@ -3601,7 +3602,12 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         connectivityManager.unregisterNetworkCallback(networkCallback)
 
-        scope.launch { stop() }
+        scope.launch {
+            stop()
+            scope.cancel()
+        }
+
+        if (instance === this) instance = null
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

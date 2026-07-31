@@ -46,6 +46,16 @@ public class ShaderMaterial {
 
         GLES20.glLinkProgram(programId);
 
+        int[] linked = new int[1];
+        GLES20.glGetProgramiv(programId, GLES20.GL_LINK_STATUS, linked, 0);
+        if (linked[0] == 0) {
+            String infoLog = GLES20.glGetProgramInfoLog(programId);
+            GLES20.glDeleteProgram(programId);
+            GLES20.glDeleteShader(vertexShaderId);
+            GLES20.glDeleteShader(fragmentShaderId);
+            throw new RuntimeException("Could not link shader program: \n" + infoLog);
+        }
+
         GLES20.glDeleteShader(vertexShaderId);
         GLES20.glDeleteShader(fragmentShaderId);
         return programId;

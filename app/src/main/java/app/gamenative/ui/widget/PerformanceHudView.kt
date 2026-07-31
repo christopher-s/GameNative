@@ -390,7 +390,7 @@ class PerformanceHudView(
     }
 
     private val whitespaceRegex = Regex("\\s+")
-    private val nonDigitRegex = Regex("[^0-9]")
+    private val nonNumericValueRegex = Regex("[^0-9.]")
     private val timeFormatter by lazy { DateFormat.getTimeFormat(context) }
     private val clockDate = Date()
 
@@ -774,10 +774,10 @@ class PerformanceHudView(
     private fun readPercentFromLine(path: String): Int? {
         val raw = readFirstLine(path)?.trim() ?: return null
         val token = raw.split(whitespaceRegex)
-            .map { it.replace(nonDigitRegex, "") }
+            .map { it.replace(nonNumericValueRegex, "") }
             .firstOrNull { it.isNotEmpty() }
             ?: return null
-        return token.toIntOrNull()?.coerceIn(0, 100)
+        return token.toFloatOrNull()?.toInt()?.coerceIn(0, 100)
     }
 
     private fun readLongFromLine(path: String): Long? {

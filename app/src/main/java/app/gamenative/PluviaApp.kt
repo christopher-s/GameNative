@@ -245,6 +245,7 @@ class PluviaApp : SplitCompatApplication() {
             PowerManager.stop()
 
             xEnvironment = null
+            xServerView = null
             inputControlsView = null
             inputControlsManager = null
             touchpadView = null

@@ -261,7 +261,11 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
             boolean ok = nativeReattachSurface(surface);
             if (!ok) {
                 surfaceInitialized = false;
+                nativeDestroyScanout();
                 nativeDestroy();
+                // The native context is gone; its window registrations are invalid
+                windowSurfaces.clear();
+                cachedDesktopDst = null;
             } else {
                 updateScene();
                 return;

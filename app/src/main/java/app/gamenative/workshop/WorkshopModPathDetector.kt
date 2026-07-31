@@ -281,9 +281,10 @@ class WorkshopModPathDetector {
     private fun resolveAppDataPath(raw: String, appDataRoots: List<AppDataRoot>): File? {
         val norm = raw.replace('\\', '/').trim()
         for (adRoot in appDataRoots) {
+            val normToken = adRoot.envToken.replace('\\', '/')
             val rem = when {
-                norm.startsWith(adRoot.envToken, ignoreCase = true) ->
-                    norm.substring(adRoot.envToken.length).trimStart('/')
+                norm.startsWith(normToken, ignoreCase = true) ->
+                    norm.substring(normToken.length).trimStart('/')
                 norm.contains("appdata/${adRoot.root.name}", ignoreCase = true) -> {
                     val m = "appdata/${adRoot.root.name}"
                     val i = norm.indexOf(m, ignoreCase = true)
