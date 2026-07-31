@@ -345,17 +345,16 @@ class SamsungPerformanceDriver(private val context: Context) : PerformanceDriver
 
     override fun getDefaultProfile(): PowerProfile {
         // Samsung driver uses integer levels (0-4)
-        // Default: smooth gaming profile. A small floor avoids clock-down frame-time spikes
-        // while retaining the full top-end range and keeping auto-tuning disabled.
+        // Default: Balanced profile (full range)
 
         return PowerProfile(
             name = PerformancePreset.BALANCED.displayName,
             governor = CpuGovernor.SCHEDUTIL, // Samsung doesn't use governors, but we need a value
-            minCpuFreq = 1, // CPU level 1
+            minCpuFreq = 0, // CPU level 0
             maxCpuFreq = 4, // CPU level 4
-            minGpuPowerLevel = 1, // GPU level 1
+            minGpuPowerLevel = 0, // GPU level 0
             maxGpuPowerLevel = 4,  // GPU level 4
-            minBusLevel = 1,
+            minBusLevel = 0,
             maxBusLevel = 4
         )
     }
