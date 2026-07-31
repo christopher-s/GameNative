@@ -1,6 +1,6 @@
 <div align="center">
 
-# GameNative
+# GameNative-mod
 
 **Play the PC games you already own — from Steam, Epic and GOG — on your Android device, with cloud saves.**
 
@@ -14,13 +14,13 @@
  </picture>
 </a>
 
-[![GitHub Release](https://img.shields.io/github/v/release/utkarshdalal/GameNative?style=flat-square&logo=github&label=latest)](https://github.com/utkarshdalal/GameNative/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/christopher-s/GameNative?style=flat-square&logo=github&label=latest)](https://github.com/christopher-s/GameNative/releases/latest)
 [![GitHub stars](https://img.shields.io/github/stars/utkarshdalal/GameNative?style=flat-square&logo=github&color=ffd700)](https://github.com/utkarshdalal/GameNative/stargazers)
 [![Discord](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv9%2Finvites%2F2hKv4VfZfE%3Fwith_counts%3Dtrue&query=%24.approximate_member_count&style=flat-square&logo=discord&logoColor=white&label=discord&color=5865F2&suffix=%20members)](https://discord.gg/2hKv4VfZfE)
 [![License](https://img.shields.io/badge/license-GPL%203.0-blue?style=flat-square)](https://github.com/utkarshdalal/GameNative/blob/master/LICENSE)
 [![Ko-fi](https://img.shields.io/badge/ko--fi-support-FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/gamenative)
 
-[**Download**](https://downloads.gamenative.app/releases/1.1.1/gamenative-v1.1.1.apk) · [**Discord**](https://discord.gg/2hKv4VfZfE) · [**Support on Ko-fi**](https://ko-fi.com/gamenative)
+[**Download**](https://github.com/christopher-s/GameNative/releases/latest) · [**Discord**](https://discord.gg/2hKv4VfZfE) · [**Support on Ko-fi**](https://ko-fi.com/gamenative)
 
 <video src="https://github.com/user-attachments/assets/95b5397b-908a-44ef-a10a-dac7723580b0" autoplay loop muted playsinline width="100%"></video>
 
@@ -28,13 +28,13 @@
 
 ---
 
-> **This is a fork of [GameNative](https://github.com/utkarshdalal/GameNative)** that tracks upstream and adds:
+> **This is a fork of [GameNative](https://github.com/utkarshdalal/GameNative)**, released as **GameNative-mod**, that tracks upstream and adds:
 >
 > - **Accessible game storage** — games can be installed to a user-accessible storage location (or a custom storage root of your choice) instead of app-private storage, so you can browse, back up and mod game files with any file manager.
 > - **Steam Store details in-app** — the game screen shows cached Steam Store info (description, publishers, Metacritic score, release status) and a screenshot gallery with pinch-to-zoom — available offline once cached.
 > - **Display refresh rate follows the FPS cap** — supported Android devices request a matching display frame rate when the in-game FPS limit changes, helping reduce unnecessary display work and improve frame pacing.
 > - **Adaptive resolution scaling** — expanded resolution and aspect-ratio controls can automatically scale rendering to balance image quality and GPU performance for each game and device.
-> - **Experimental CPU/GPU power controls** — supported rooted handhelds and Samsung devices can tune CPU, GPU and memory-bus performance, apply saved profiles and optionally auto-tune while a game is running, with original hardware settings restored afterward.
+> - **Experimental CPU/GPU power controls** — supported rooted handhelds and Samsung devices can tune CPU, GPU and memory-bus performance, apply saved profiles and optionally auto-tune while a game is running, with original hardware settings restored afterward. Power management follows the game's suspend state: hardware is restored to defaults while a game is suspended and the profile is re-applied on resume.
 > - **Side-by-side debug builds** — debug builds use a distinct application ID, so the fork can be installed next to the official app without clobbering it.
 >
 > Everything else — compatibility, features, cloud saves — matches upstream.
@@ -66,7 +66,7 @@ It's still early. Not every game runs yet, and some need tweaking to play well, 
 
 ## How to use
 
-1. Download the latest release [here](https://downloads.gamenative.app/releases//gamenative-v.apk)
+1. Download the latest GameNative-mod release [here](https://github.com/christopher-s/GameNative/releases/latest)
 2. Install the APK on your Android device
 3. Log in to your Steam account
 4. Install your game
