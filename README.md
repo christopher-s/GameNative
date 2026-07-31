@@ -37,6 +37,8 @@
 > - **Experimental CPU/GPU power controls** — supported rooted handhelds and Samsung devices can tune CPU, GPU and memory-bus performance, apply saved profiles and optionally auto-tune while a game is running, with original hardware settings restored afterward. Power management follows the game's suspend state: hardware is restored to defaults while a game is suspended and the profile is re-applied on resume.
 > - **Side-by-side debug builds** — debug builds use a distinct application ID, so the fork can be installed next to the official app without clobbering it.
 >
+> Defaults always match upstream: device- and game-specific tuning lives in per-container settings (env vars, FEX/Box64 presets, graphics driver versions) and in downloadable driver options — never baked into the app defaults.
+>
 > Everything else — compatibility, features, cloud saves — matches upstream.
 
 ---
