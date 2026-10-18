@@ -60,6 +60,10 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
     private int cachedDesktopSrcW = 0, cachedDesktopSrcH = 0;
     private Window desktopWindow = null;
     private final ArrayList<RenderableWindow> renderList = new ArrayList<>();
+    private volatile float pendingFrameRate = 0f;
+    private volatile byte pendingFrameRateCompatibility = 0;
+    private volatile byte pendingFrameRateChangeStrategy = 0;
+    private volatile boolean hasPendingFrameRateRequest = false;
     private static class RenderableWindow {
         public Drawable content;
         public Window window;
@@ -164,6 +168,7 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
     private native void nativeUpdateWindow(long contentId, boolean visible, int zOrder,
                                            int srcL, int srcT, int srcR, int srcB,
                                            int dstL, int dstT, int dstR, int dstB);
+    private native void nativeSetFrameRate(float frameRate, byte compatibility, byte changeStrategy);
 
     private WindowSurface getOrCreateWindowSurface(int contentId, int w, int h, String debugName)
     {
@@ -259,7 +264,11 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
             boolean ok = nativeReattachSurface(surface);
             if (!ok) {
                 surfaceInitialized = false;
+                nativeDestroyScanout();
                 nativeDestroy();
+                // The native context is gone; its window registrations are invalid
+                windowSurfaces.clear();
+                cachedDesktopDst = null;
             } else {
                 updateScene();
                 return;
@@ -269,6 +278,9 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
         surfaceInitialized = nativeInit(surface, xServer.screenInfo.width, xServer.screenInfo.height);
         if (surfaceInitialized) {
             NATIVE_CONTEXT_GENERATION.incrementAndGet();
+            if (hasPendingFrameRateRequest) {
+                nativeSetFrameRate(pendingFrameRate, pendingFrameRateCompatibility, pendingFrameRateChangeStrategy);
+            }
             nativeSetSfCallbackTarget(this);
             updateTransform();
             nativeInitScanout();
@@ -679,6 +691,17 @@ public class ASurfaceRenderer implements WindowManager.OnWindowModificationListe
             return wc != null && wc.contains(forceFullscreenWMClass);
         }
         return false;
+    }
+
+    public void setFrameRate(float frameRate, int compatibility, int changeStrategy) {
+        Timber.d("setFrameRate frameRate=%f compatibility=%d changeStrategy=%d", frameRate, compatibility, changeStrategy);
+        pendingFrameRate = frameRate;
+        pendingFrameRateCompatibility = (byte) compatibility;
+        pendingFrameRateChangeStrategy = (byte) changeStrategy;
+        hasPendingFrameRateRequest = true;
+        if (surfaceInitialized) {
+            nativeSetFrameRate(pendingFrameRate, pendingFrameRateCompatibility, pendingFrameRateChangeStrategy);
+        }
     }
 
     private FrameRating hudRef = null;

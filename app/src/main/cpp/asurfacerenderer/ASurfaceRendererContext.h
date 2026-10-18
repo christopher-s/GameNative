@@ -78,6 +78,10 @@ public:
                       int srcL, int srcT, int srcR, int srcB,
                       int dstL, int dstT, int dstR, int dstB);
 
+    void setFrameRate(float frameRate, int8_t compatibility, int8_t changeStrategy);
+
+    void applyFrameRateToTx(void* tx, void* sc, float rate, int8_t compatibility, int8_t changeStrategy);
+
     void setSfCallbackTarget(JNIEnv* env, jobject rendererObj);
 
     void beginShutdown();
@@ -151,6 +155,12 @@ private:
     int32_t          scanoutCursorBufH = 0;
     int              scanoutCursorFence = -1;
 
+    // Written from the UI thread (nativeSetFrameRate), read from the X-server
+    // thread (registerWindowSC) - atomic to avoid a cross-thread data race.
+    std::atomic<float>  pendingFrameRate{0.f};
+    std::atomic<int8_t> pendingCompatibility{0};
+    std::atomic<int8_t> pendingChangeStrategy{0};
+
     std::atomic<int64_t> scanoutDstXY{0};
     std::atomic<int64_t> scanoutDstWH{0};
 
@@ -171,6 +181,8 @@ private:
     void* fnSTReparent         = nullptr;
     void* fnSTSetOnComplete    = nullptr;
     void* fnSTStatsGetPreviousReleaseFenceFd = nullptr;
+    void* fnSTSetFrameRate = nullptr;
+    void* fnSTSetFrameRateWithChangeStrategy = nullptr;
 
     void oneShot(std::function<void(void*)> fill);
 

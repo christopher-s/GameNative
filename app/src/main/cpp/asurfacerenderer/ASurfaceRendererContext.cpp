@@ -47,6 +47,8 @@ typedef void  (*pfn_STSetOnComplete)(void* transaction, void* context,
                                      void (*callback)(void* context, void* stats));
 typedef int   (*pfn_STStatsGetPreviousReleaseFenceFd)(void* stats, void* surface_control);
 typedef void  (*pfn_STReparent)(void*, void*, void*);
+typedef void  (*pfn_STSetFrameRate)(void*, void*, float, int8_t);
+typedef void  (*pfn_STSetFrameRateWithChangeStrategy)(void*, void*, float, int8_t, int8_t);
 
 #define SC_CREATE(win, name)   ((pfn_SCCreateFromWindow)fnSCCreateFromWin)((win),(name))
 #define SC_RELEASE(sc)         ((pfn_SCRelease)fnSCRelease)((sc))
@@ -59,6 +61,14 @@ typedef void  (*pfn_STReparent)(void*, void*, void*);
 #define ST_SETGEO(t,sc,s,d,r)  ((pfn_STSetGeometry)fnSTSetGeometry)((t),(sc),(s),(d),(r))
 #define ST_SET_TRANSPARENCY(t,sc,tr) if(fnSTSetBufferTransparency) ((pfn_STSetBufferTransparency)fnSTSetBufferTransparency)((t),(sc),(tr))
 #define ST_REPARENT(t,sc,p)    if(fnSTReparent) ((pfn_STReparent)fnSTReparent)((t),(sc),(p))
+void ASurfaceRendererContext::applyFrameRateToTx(void* tx, void* sc, float rate,
+                                                 int8_t compatibility, int8_t changeStrategy) {
+    if (fnSTSetFrameRateWithChangeStrategy) {
+        ((pfn_STSetFrameRateWithChangeStrategy)fnSTSetFrameRateWithChangeStrategy)(tx, sc, rate, compatibility, changeStrategy);
+    } else if (fnSTSetFrameRate) {
+        ((pfn_STSetFrameRate)fnSTSetFrameRate)(tx, sc, rate, compatibility);
+    }
+}
 
 #define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
 
@@ -149,6 +159,8 @@ bool ASurfaceRendererContext::loadScanoutApi() {
     fnSTSetBufferTransparency = dlsym(lib, "ASurfaceTransaction_setBufferTransparency");
     fnSTSetBufferTransform = dlsym(lib, "ASurfaceTransaction_setBufferTransform");
     fnSTReparent      = dlsym(lib, "ASurfaceTransaction_reparent");
+    fnSTSetFrameRate = dlsym(lib, "ASurfaceTransaction_setFrameRate");
+    fnSTSetFrameRateWithChangeStrategy = dlsym(lib, "ASurfaceTransaction_setFrameRateWithChangeStrategy");
     fnSTStatsGetPreviousReleaseFenceFd = dlsym(lib, "ASurfaceTransactionStats_getPreviousReleaseFenceFd");
 
     bool coreOk = fnSCCreateFromWin && fnSCRelease && fnSTCreate && fnSTDelete && fnSTApply && fnSTSetBuffer && fnSTSetVisibility &&
@@ -159,7 +171,8 @@ bool ASurfaceRendererContext::loadScanoutApi() {
         fnSCCreateFromWin = fnSCRelease = fnSTCreate = fnSTDelete = fnSTApply =
         fnSTStatsGetPreviousReleaseFenceFd = fnSTSetBufferTransparency =
         fnSTSetBuffer = fnSTSetZOrder = fnSTSetVisibility = fnSTSetOnComplete =
-        fnSTSetGeometry = fnSTReparent = fnSTSetBufferTransform = nullptr;
+        fnSTSetGeometry = fnSTReparent = fnSTSetBufferTransform =
+        fnSTSetFrameRate = fnSTSetFrameRateWithChangeStrategy = nullptr;
         return false;
     }
     SCANOUT_LOG("loadScanoutApi: OK");
@@ -651,6 +664,15 @@ void ASurfaceRendererContext::registerWindowSC(int64_t contentId, const char* de
         }
         windowScMap[contentId] = surfaceControl;
     }
+
+    const float rate = pendingFrameRate.load(std::memory_order_acquire);
+    if (rate != 0.f && (fnSTSetFrameRate || fnSTSetFrameRateWithChangeStrategy)) {
+        const int8_t compat = pendingCompatibility.load(std::memory_order_acquire);
+        const int8_t strategy = pendingChangeStrategy.load(std::memory_order_acquire);
+        oneShot([&](void* tx) {
+            applyFrameRateToTx(tx, surfaceControl, rate, compat, strategy);
+        });
+    }
     if (oldSurfaceControl) retireSurfaceControl(oldSurfaceControl, oldCurrentSlot);
 }
 
@@ -938,4 +960,26 @@ ASurfaceRendererContext::ConvertedBufferSlot::~ConvertedBufferSlot() {
         AHardwareBuffer_release(buffer);
         buffer = nullptr;
     }
+}
+
+void ASurfaceRendererContext::setFrameRate(float frameRate,
+                                           int8_t compatibility, int8_t changeStrategy)
+{
+    if (!fnSTSetFrameRate && !fnSTSetFrameRateWithChangeStrategy) return;
+
+    pendingFrameRate.store(frameRate, std::memory_order_release);
+    pendingCompatibility.store(compatibility, std::memory_order_release);
+    pendingChangeStrategy.store(changeStrategy, std::memory_order_release);
+
+    // Hold windowScMutex across the transaction so a concurrent unregister/retire
+    // cannot release a SurfaceControl while it is referenced here.
+    std::lock_guard<std::mutex> lk(windowScMutex);
+    if (windowScMap.empty()) return;
+
+    void* tx = ST_CREATE();
+    if (!tx) return;
+    for (auto& [id, sc] : windowScMap)
+        applyFrameRateToTx(tx, sc, frameRate, compatibility, changeStrategy);
+    ST_APPLY(tx);
+    ST_DELETE(tx);
 }
