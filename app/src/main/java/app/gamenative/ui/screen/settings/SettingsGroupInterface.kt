@@ -675,6 +675,7 @@ fun SettingsGroupInterface(
         // may need mkdirs() on first plug-in.
         val externalStorageFallbackLabel = stringResource(R.string.storage_external)
         var selectedStoragePath by rememberSaveable { mutableStateOf(PrefManager.externalStoragePath) }
+        var useExternalStorage by rememberSaveable { mutableStateOf(PrefManager.useExternalStorage) }
 
         // All mounted app-scoped external directories. Primary phone storage is
         // intentionally included so game payloads can be reached through ADB.
@@ -752,7 +753,6 @@ fun SettingsGroupInterface(
                 }
             }
         }
-        var useExternalStorage by rememberSaveable { mutableStateOf(PrefManager.useExternalStorage) }
         SettingsSwitch(
             colors = settingsTileColorsAlt(),
             enabled = dirs.isNotEmpty(),
