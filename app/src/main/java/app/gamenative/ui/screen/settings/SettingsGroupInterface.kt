@@ -87,6 +87,9 @@ import app.gamenative.utils.LocaleHelper
 import app.gamenative.service.epic.EpicAuthManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlinx.coroutines.CoroutineScope
@@ -96,6 +99,7 @@ import app.gamenative.events.AndroidEvent
 import app.gamenative.ui.screen.auth.EpicOAuthActivity
 import app.gamenative.ui.screen.auth.GOGOAuthActivity
 import app.gamenative.ui.screen.auth.AmazonOAuthActivity
+import app.gamenative.ui.components.rememberCustomGameFolderPicker
 import app.gamenative.service.amazon.AmazonAuthManager
 import app.gamenative.utils.PlatformOAuthHandlers
 import app.gamenative.utils.StorageUtils
@@ -670,18 +674,82 @@ fun SettingsGroupInterface(
         // Runs off the composition thread because synthesizing the USB candidate
         // may need mkdirs() on first plug-in.
         val externalStorageFallbackLabel = stringResource(R.string.storage_external)
-        val dirs by produceState(initialValue = emptyList<File>(), ctx) {
+        var selectedStoragePath by rememberSaveable { mutableStateOf(PrefManager.externalStoragePath) }
+
+        // All mounted app-scoped external directories. Primary phone storage is
+        // intentionally included so game payloads can be reached through ADB.
+        // getExternalFilesDirs misses USB OTG on most devices, so StorageUtils also
+        // enumerates StorageManager.storageVolumes and synthesizes the per-app files dir.
+        // Runs off the composition thread because synthesizing the USB candidate
+        // may need mkdirs() on first plug-in.
+        val detectedDirs by produceState(initialValue = emptyList<File>(), ctx) {
             value = withContext(Dispatchers.IO) {
                 StorageUtils.getAllExternalFilesDirs(ctx)
                     .filter { Environment.getExternalStorageState(it) == Environment.MEDIA_MOUNTED }
-                    .filter { StorageUtils.isExternalInstallTarget(sm, it) }
+                    .distinctBy { it.absolutePath }
+                    .sortedByDescending { sm?.getStorageVolume(it)?.isPrimary == true }
+            }
+        }
+        val dirs = remember(detectedDirs, selectedStoragePath) {
+            buildList {
+                addAll(detectedDirs)
+                if (selectedStoragePath.isNotBlank()) {
+                    val selectedDir = File(selectedStoragePath)
+                    if (selectedDir.isDirectory && none { it.absolutePath == selectedDir.absolutePath }) {
+                        add(selectedDir)
+                    }
+                }
+            }
+        }
+
+        val folderPicker = rememberCustomGameFolderPicker(
+            onPathSelected = { path ->
+                val selectedDir = runCatching { File(path).canonicalFile }.getOrNull()
+                if (selectedDir == null || !selectedDir.isDirectory || !selectedDir.canRead() || !selectedDir.canWrite()) {
+                    SnackbarManager.show(ctx.getString(R.string.settings_interface_custom_storage_folder_invalid))
+                } else {
+                    selectedStoragePath = selectedDir.absolutePath
+                    PrefManager.externalStoragePath = selectedDir.absolutePath
+                    useExternalStorage = true
+                    PrefManager.useExternalStorage = true
+                }
+            },
+            onFailure = { message -> SnackbarManager.show(message) },
+        )
+        val manageStorageLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult(),
+        ) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()) {
+                folderPicker.launchPicker()
+            } else {
+                SnackbarManager.show(ctx.getString(R.string.settings_interface_custom_storage_permission_denied))
+            }
+        }
+        val chooseCustomStorageFolder = {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:${ctx.packageName}")
+                }
+                manageStorageLauncher.launch(intent)
+            } else {
+                folderPicker.launchPicker()
             }
         }
 
         // Labels the user sees
-        val labels = remember(dirs) {
+        val phoneStorageLabel = stringResource(R.string.settings_interface_phone_storage)
+        val customFolderLabel = stringResource(R.string.settings_interface_custom_storage_folder_label)
+        val customFolderSubtitle = stringResource(R.string.settings_interface_custom_storage_folder_subtitle)
+        val labels = remember(dirs, detectedDirs, phoneStorageLabel, customFolderLabel, externalStorageFallbackLabel) {
             dirs.map { dir ->
-                sm?.getStorageVolume(dir)?.getDescription(ctx) ?: externalStorageFallbackLabel
+                val volume = sm?.getStorageVolume(dir)
+                if (detectedDirs.none { it.absolutePath == dir.absolutePath }) {
+                    customFolderLabel
+                } else if (volume?.isPrimary == true) {
+                    phoneStorageLabel
+                } else {
+                    volume?.getDescription(ctx) ?: externalStorageFallbackLabel
+                }
             }
         }
         var useExternalStorage by rememberSaveable { mutableStateOf(PrefManager.useExternalStorage) }
@@ -699,20 +767,18 @@ fun SettingsGroupInterface(
             onCheckedChange = {
                 useExternalStorage = it
                 PrefManager.useExternalStorage = it
-                if (it && dirs.isNotEmpty()) {
-                    PrefManager.externalStoragePath = StorageUtils.preferredInstallRoot(dirs[0])
+                if (it && dirs.isNotEmpty() && dirs.none { dir -> dir.absolutePath == selectedStoragePath }) {
+                    selectedStoragePath = dirs[0].absolutePath
+                    PrefManager.externalStoragePath = selectedStoragePath
                 }
             },
         )
-        if (useExternalStorage) {
+        if (useExternalStorage && dirs.isNotEmpty()) {
             // Currently selected item
-            var selectedIndex by rememberSaveable(dirs) {
-                mutableStateOf(
-                    dirs.indexOfFirst { dir ->
-                        dir.absolutePath == PrefManager.externalStoragePath ||
-                            StorageUtils.publicInstallRoot(dir)?.absolutePath == PrefManager.externalStoragePath
-                    }.takeIf { it >= 0 } ?: 0,
-                )
+            var selectedIndex by rememberSaveable { mutableStateOf(0) }
+            LaunchedEffect(dirs, selectedStoragePath) {
+                selectedIndex = dirs.indexOfFirst { it.absolutePath == selectedStoragePath }
+                    .takeIf { it >= 0 } ?: 0
             }
             SettingsListDropdown(
                 title = { Text(text = stringResource(R.string.settings_interface_storage_volume_title)) },
@@ -720,9 +786,20 @@ fun SettingsGroupInterface(
                 value = selectedIndex,
                 onItemSelected = { idx ->
                     selectedIndex = idx
-                    PrefManager.externalStoragePath = StorageUtils.preferredInstallRoot(dirs[idx])
+                    selectedStoragePath = dirs[idx].absolutePath
+                    PrefManager.externalStoragePath = selectedStoragePath
                 },
                 colors = settingsTileColorsAlt(),
+            )
+            SettingsMenuLink(
+                colors = settingsTileColorsAlt(),
+                title = { Text(text = stringResource(R.string.settings_interface_custom_storage_folder_title)) },
+                subtitle = {
+                    Text(
+                        text = selectedStoragePath.ifBlank { customFolderSubtitle },
+                    )
+                },
+                onClick = chooseCustomStorageFolder,
             )
         }
         // Steam download server selection

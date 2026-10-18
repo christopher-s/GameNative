@@ -159,7 +159,7 @@ class WindowsVrRuntimeService(context: Context) : Closeable {
     }
 
     private fun captureDiagnostics() {
-        diagnostics.record("android", "app log tail:\n${CrashHandler.getAppLogs(800)}")
+        diagnostics.record("android", "app log tail: unavailable (logcat access removed in mod build)")
         val active = container
         if (active != null) {
             val runtime = File(active.rootDir, ".wine/drive_c/gamenative-xr")

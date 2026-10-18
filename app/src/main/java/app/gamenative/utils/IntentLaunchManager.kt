@@ -3,6 +3,7 @@ package app.gamenative.utils
 import android.content.Context
 import android.content.Intent
 import app.gamenative.PluviaApp
+import app.gamenative.BuildConfig
 import app.gamenative.PrefManager
 import app.gamenative.data.GameSource
 import com.winlator.container.Container
@@ -20,7 +21,8 @@ object IntentLaunchManager {
 
     private const val EXTRA_GAME_SOURCE = "game_source"
     private const val EXTRA_CONTAINER_CONFIG = "container_config"
-    private const val ACTION_LAUNCH_GAME = "app.gamenative.LAUNCH_GAME"
+    val launchGameAction: String
+        get() = "${BuildConfig.APPLICATION_ID}.LAUNCH_GAME"
     private const val ACTION_VIEW = "android.intent.action.VIEW"
     private const val URI_SCHEME = "gamenative"
     private const val URI_HOST = "run"
@@ -34,8 +36,8 @@ object IntentLaunchManager {
     fun parseLaunchIntent(intent: Intent): LaunchRequest? {
         Timber.d("[IntentLaunchManager]: Parsing intent: action=${intent.action}")
 
-        if (intent.action != ACTION_LAUNCH_GAME && intent.action != ACTION_VIEW) {
-            Timber.d("[IntentLaunchManager]: Intent action '${intent.action}' doesn't match expected action '$ACTION_LAUNCH_GAME' or '$ACTION_VIEW'")
+        if (intent.action != launchGameAction && intent.action != ACTION_VIEW) {
+            Timber.d("[IntentLaunchManager]: Intent action '${intent.action}' doesn't match expected action '$launchGameAction' or '$ACTION_VIEW'")
             return null
         }
         val gameId: Int

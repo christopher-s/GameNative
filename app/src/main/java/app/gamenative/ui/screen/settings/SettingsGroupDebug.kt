@@ -112,22 +112,6 @@ fun SettingsGroupDebug() {
         }
     }
 
-    /* Save log cat */
-    val saveLogCat = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("text/plain"),
-    ) { resultUri ->
-        try {
-            resultUri?.let {
-                val logs = CrashHandler.getAppLogs(1000)
-                context.contentResolver.openOutputStream(resultUri)?.use { outputStream ->
-                    outputStream.write(logs.toByteArray())
-                }
-            }
-        } catch (e: Exception) {
-            SnackbarManager.show(context.getString(R.string.toast_failed_log_save))
-        }
-    }
-
     if (showLogcatDialog && latestCrashFile != null) {
         val crashText by produceState("Loading...", latestCrashFile) {
             value = withContext(Dispatchers.IO) { readTail(latestCrashFile) }
@@ -178,12 +162,6 @@ fun SettingsGroupDebug() {
     }
 
     SettingsGroup() {
-        SettingsMenuLink(
-            colors = settingsTileColors(),
-            title = { Text(text = stringResource(R.string.settings_save_logcat_title)) },
-            subtitle = { Text(text = stringResource(R.string.settings_save_logcat_subtitle)) },
-            onClick = { saveLogCat.launch("app_logs_${CrashHandler.timestamp}.txt") },
-        )
         // Link to open channel selector
         SettingsMenuLink(
             colors = settingsTileColors(),

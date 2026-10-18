@@ -163,6 +163,9 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".mod"
+            versionNameSuffix = "-mod"
+            resValue("string", "app_name", "GameNative Mod")
             isDebuggable = true
             isMinifyEnabled = false
             isShrinkResources = false

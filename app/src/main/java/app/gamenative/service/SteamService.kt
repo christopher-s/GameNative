@@ -59,6 +59,7 @@ import app.gamenative.events.AndroidEvent
 import app.gamenative.events.SteamEvent
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.DepotManifestFiles
+import app.gamenative.utils.GameStoragePaths
 import app.gamenative.utils.FileUtils
 import app.gamenative.utils.LicenseSerializer
 import app.gamenative.utils.LocaleHelper
@@ -565,22 +566,19 @@ class SteamService : Service(), IChallengeUrlChanged {
             get() = Paths.get(DownloadService.baseDataDirPath, "Steam", "steamapps", "common").pathString
 
         private val externalAppInstallRoot: String
-            get() = PrefManager.externalStoragePath
+            get() = GameStoragePaths.selectedExternalRoot
 
         val externalAppInstallPath: String
-            get() = Paths.get(externalAppInstallRoot, "Steam", "steamapps", "common").pathString
+            get() = GameStoragePaths.steamInstallPath(externalAppInstallRoot)
 
         // all install paths: internal + configured external + all mounted volumes
         val allInstallPaths: List<String>
             get() {
                 val paths = mutableListOf(internalAppInstallPath)
                 // only include configured external path if it's a real absolute path
-                if (PrefManager.externalStoragePath.isNotBlank()) {
-                    paths += externalAppInstallPath
-                }
-                for (volPath in DownloadService.externalVolumePaths) {
-                    if (volPath.isNotBlank()) {
-                        paths += Paths.get(volPath, "Steam", "steamapps", "common").pathString
+                for (root in listOf(DownloadService.primaryExternalFilesPath, GameStoragePaths.selectedExternalRoot) + DownloadService.externalVolumePaths) {
+                    if (root.isNotBlank()) {
+                        paths += GameStoragePaths.steamInstallPath(root)
                     }
                 }
                 return paths.distinct()
@@ -592,13 +590,11 @@ class SteamService : Service(), IChallengeUrlChanged {
             }
         private val externalAppStagingPath: String
             get() {
-                return Paths.get(externalAppInstallRoot, "Steam", "steamapps", "staging").pathString
+                return GameStoragePaths.steamStagingPath(externalAppInstallRoot)
             }
 
         private val externalStorageReady: Boolean
-            get() = PrefManager.useExternalStorage && File(externalAppInstallRoot).let {
-                it.path.isNotBlank() && it.exists()
-            }
+            get() = GameStoragePaths.isExternalStorageReady
 
         val defaultStoragePath: String
             get() {
@@ -627,7 +623,7 @@ class SteamService : Service(), IChallengeUrlChanged {
 
         val defaultAppStagingPath: String
             get() {
-                return if (PrefManager.useExternalStorage) {
+                return if (externalStorageReady) {
                     externalAppStagingPath
                 } else {
                     internalAppStagingPath

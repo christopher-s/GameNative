@@ -30,12 +30,18 @@ object DownloadService {
     var externalVolumePaths: List<String> = emptyList()
         private set
 
+    // Primary app-scoped external files directory
+    // (/storage/emulated/0/Android/data/<package>/files).
+    var primaryExternalFilesPath: String = ""
+        private set
+
     fun populateDownloadService(context: Context) {
         baseDataDirPath = context.dataDir.path
         baseCacheDirPath = context.cacheDir.path
         // Prefer the parent of external files dir (Android/data/<package>) so we can create siblings of /files
         val extFiles = context.getExternalFilesDir(null)
         baseExternalAppDirPath = extFiles?.parentFile?.path ?: ""
+        primaryExternalFilesPath = extFiles?.absolutePath ?: ""
 
         val sm = context.getSystemService(android.os.storage.StorageManager::class.java)
         val appFilesDirs = StorageUtils.getAllExternalFilesDirs(context)
